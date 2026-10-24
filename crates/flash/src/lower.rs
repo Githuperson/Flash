@@ -143,6 +143,52 @@ struct FnLower<'a, 'p> {
     ret_ty: Type,
     is_main: bool,
     hf_locals: Vec<LocalInfo>,
+    /// (list variable, index variable) pairs for which `list[index]` is proven in range.
+    safe_index: Vec<(LocalId, LocalId)>,
+}
+
+/// Does any statement in `stmts` possibly change the length of (or move / replace) list `xs`?
+fn body_mutates(stmts: &[HStmt], xs: LocalId) -> bool {
+    fn root(e: &HExpr) -> Option<LocalId> {
+        match &e.kind {
+            HKind::Local(id, _) => Some(*id),
+            HKind::Field(b, _) | HKind::Index(b, _) => root(b),
+            _ => None,
+        }
+    }
+    fn expr(e: &HExpr, xs: LocalId) -> bool {
+        match &e.kind {
+            HKind::Local(id, UseMode::Move) => *id == xs,
+            HKind::Builtin(b, args) => {
+                (matches!(b, Builtin::Append | Builtin::Pop) && args.first().and_then(root) == Some(xs)) || args.iter().any(|a| expr(a, xs))
+            }
+            HKind::Call(_, args) => args.iter().any(|a| root(a) == Some(xs) && !a.ty.is_copy() || expr(a, xs)),
+            HKind::PluginCall { args, .. } | HKind::Struct(args) | HKind::List(args) => args.iter().any(|a| expr(a, xs)),
+            HKind::Unary(_, a) | HKind::Cast(a) | HKind::Try(a) | HKind::Field(a, _) => expr(a, xs),
+            HKind::Binary(_, a, b) | HKind::Logic(_, a, b) | HKind::Index(a, b) => expr(a, xs) || expr(b, xs),
+            _ => false,
+        }
+    }
+    stmts.iter().any(|s| match &s.kind {
+        HStmtKind::Let(_, e) | HStmtKind::Expr(e) => expr(e, xs),
+        HStmtKind::Assign(p, v) => root(p) == Some(xs) || expr(p, xs) || expr(v, xs),
+        HStmtKind::If(c, a, b) => expr(c, xs) || body_mutates(a, xs) || body_mutates(b, xs),
+        HStmtKind::While(c, b) => expr(c, xs) || body_mutates(b, xs),
+        HStmtKind::ForRange { lo, hi, body, .. } => expr(lo, xs) || expr(hi, xs) || body_mutates(body, xs),
+        HStmtKind::ForList { list, body, .. } => expr(list, xs) || body_mutates(body, xs),
+        HStmtKind::Return(Some(e)) => expr(e, xs),
+        _ => false,
+    })
+}
+
+/// Is local `v` assigned anywhere in `stmts`?
+fn body_assigns(stmts: &[HStmt], v: LocalId) -> bool {
+    stmts.iter().any(|s| match &s.kind {
+        HStmtKind::Assign(p, _) => matches!(p.kind, HKind::Local(id, _) if id == v),
+        HStmtKind::If(_, a, b) => body_assigns(a, v) || body_assigns(b, v),
+        HStmtKind::While(_, b) | HStmtKind::ForRange { body: b, .. } | HStmtKind::ForList { body: b, .. } => body_assigns(b, v),
+        _ => false,
+    })
 }
 
 fn collect_moves_expr(e: &HExpr, out: &mut HashSet<LocalId>) {
@@ -222,6 +268,7 @@ impl<'a, 'p> FnLower<'a, 'p> {
             ret_ty: Type::None,
             is_main: false,
             hf_locals: vec![],
+            safe_index: vec![],
         }
     }
 
@@ -711,6 +758,23 @@ impl<'a, 'p> FnLower<'a, 'p> {
         let latch = self.new_block();
         let exit = self.new_block();
         let vr = self.local_regs[var];
+        // Bounds-check elimination: `for i in 0..len(xs)` where xs is not modified in the body
+        // and i is not reassigned proves `xs[i]` is in range.
+        let mut proven: Option<(LocalId, LocalId)> = None;
+        if !inclusive {
+            if let (HKind::Int(l), HKind::Builtin(Builtin::Len, a)) = (&lo.kind, &hi.kind) {
+                if *l >= 0 {
+                    if let HKind::Local(xs, _) = a[0].kind {
+                        if matches!(a[0].ty, Type::List(_)) && !body_mutates(body, xs) && !body_assigns(body, var) {
+                            proven = Some((xs, var));
+                        }
+                    }
+                }
+            }
+        }
+        if let Some(p) = proven {
+            self.safe_index.push(p);
+        }
         if inclusive {
             let ok = self.cmp(le, cnt, hi_r);
             self.branch(ok, bb, exit);
@@ -725,6 +789,9 @@ impl<'a, 'p> FnLower<'a, 'p> {
         self.loops.push(LoopCtx { break_bb: exit, continue_bb: latch, scope_depth: self.scopes.len() });
         self.block(body);
         self.loops.pop();
+        if proven.is_some() {
+            self.safe_index.pop();
+        }
         self.jump_to(latch);
         self.switch(latch);
         if inclusive {
@@ -830,12 +897,18 @@ impl<'a, 'p> FnLower<'a, 'p> {
         let i = self.expr(idx);
         let it = int_ty_of(&idx.ty);
         let i64v = self.widen(i, it);
-        let len = self.load(Ty::I64, b, 0);
-        let ok = self.cmp(CmpOp::ULt, i64v, len);
-        let pb = self.panic_block("fl_panic_bounds", &[i64v, len]);
-        let cont = self.new_block();
-        self.branch(ok, cont, pb);
-        self.switch(cont);
+        let proven = match (&base.kind, &idx.kind) {
+            (HKind::Local(l, _), HKind::Local(v, _)) => self.safe_index.contains(&(*l, *v)),
+            _ => false,
+        };
+        if !proven {
+            let len = self.load(Ty::I64, b, 0);
+            let ok = self.cmp(CmpOp::ULt, i64v, len);
+            let pb = self.panic_block("fl_panic_bounds", &[i64v, len]);
+            let cont = self.new_block();
+            self.branch(ok, cont, pb);
+            self.switch(cont);
+        }
         let data = self.load(Ty::I64, b, 16);
         let stride = self.iconst(Ty::I64, Self::stride(et));
         let off = self.bin(BinOp::Mul, i64v, stride);

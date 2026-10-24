@@ -22,11 +22,23 @@ pub fn flash(args: &[&str]) -> Output {
 
 /// Build a program and run it; returns (build output, run output).
 pub fn build_and_run(src: &Path, release: bool, tag: &str, run_args: &[&str]) -> (Output, Option<Output>) {
+    build_and_run_with(src, release, None, tag, run_args)
+}
+
+pub fn clang_available() -> bool {
+    Command::new(std::env::var("FLASH_CLANG").unwrap_or_else(|_| "clang".into())).arg("--version").output().map(|o| o.status.success()).unwrap_or(false)
+}
+
+pub fn build_and_run_with(src: &Path, release: bool, backend: Option<&str>, tag: &str, run_args: &[&str]) -> (Output, Option<Output>) {
     let dir = scratch_dir(tag);
     let exe = dir.join(src.file_stem().unwrap());
     let mut args = vec!["build", src.to_str().unwrap(), "-o", exe.to_str().unwrap()];
     if release {
         args.push("--release");
+    }
+    if let Some(b) = backend {
+        args.push("--backend");
+        args.push(b);
     }
     let b = flash(&args);
     if !b.status.success() {

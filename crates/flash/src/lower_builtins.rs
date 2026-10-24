@@ -164,7 +164,11 @@ impl<'a, 'p> FnLower<'a, 'p> {
             B::Abs => {
                 let v = self.borrow(&args[0]);
                 match &args[0].ty {
-                    Type::Float => self.rtv("fl_math_abs", &[v]),
+                    Type::Float => {
+                        let d = self.vreg(Ty::F64);
+                        self.emit(Inst::Un { dst: d, op: UnOp::FAbs, a: v });
+                        d
+                    }
                     t => {
                         let ty = ir_ty(t);
                         let z = self.iconst(ty, 0);
@@ -194,7 +198,51 @@ impl<'a, 'p> FnLower<'a, 'p> {
             }
             B::MathF(name) => {
                 let v = self.borrow(&args[0]);
-                self.rtv(&format!("fl_math_{}", name), &[v])
+                let op = match *name {
+                    "sqrt" => Some(UnOp::FSqrt),
+                    "floor" => Some(UnOp::FFloor),
+                    "ceil" => Some(UnOp::FCeil),
+                    _ => None,
+                };
+                match op {
+                    Some(op) => {
+                        let d = self.vreg(Ty::F64);
+                        self.emit(Inst::Un { dst: d, op, a: v });
+                        d
+                    }
+                    None => self.rtv(&format!("fl_math_{}", name), &[v]),
+                }
+            }
+            B::Fill => {
+                let Type::List(et) = &e.ty else { unreachable!() };
+                let n = self.borrow(&args[0]);
+                let v = self.borrow(&args[1]);
+                let zero = self.iconst(Ty::I64, 0);
+                let neg = self.cmp(CmpOp::SLt, n, zero);
+                let cnt = self.vreg(Ty::I64);
+                self.emit(Inst::Select { dst: cnt, cond: neg, a: zero, b: n });
+                let stride = self.iconst(Ty::I64, Self::stride(et));
+                let l = self.rtv("fl_list_new", &[cnt, stride]);
+                let data = self.load(Ty::I64, l, 16);
+                let i = self.iconst(Ty::I64, 0);
+                let head = self.new_block();
+                let body = self.new_block();
+                let exit = self.new_block();
+                self.jump_to(head);
+                self.switch(head);
+                let c = self.cmp(CmpOp::SLt, i, cnt);
+                self.branch(c, body, exit);
+                self.switch(body);
+                let off = self.bin(BinOp::Mul, i, stride);
+                let addr = self.bin(BinOp::Add, data, off);
+                self.store(addr, 0, v);
+                let one = self.iconst(Ty::I64, 1);
+                let i2 = self.bin(BinOp::Add, i, one);
+                self.copy(i, i2);
+                self.jump_to(head);
+                self.switch(exit);
+                self.store(l, 0, cnt);
+                l
             }
             B::Pow => {
                 let a = self.borrow(&args[0]);

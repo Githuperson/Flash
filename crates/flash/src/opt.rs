@@ -208,6 +208,10 @@ fn fold_constants(f: &mut Function) -> bool {
                         (Some(K::I(x)), UnOp::Neg) => Some(Inst::IConst { dst: *dst, val: canon(ty, x.wrapping_neg()) }),
                         (Some(K::I(x)), UnOp::Not) => Some(Inst::IConst { dst: *dst, val: canon(ty, !x) }),
                         (Some(K::F(x)), UnOp::FNeg) => Some(Inst::FConst { dst: *dst, val: -x }),
+                        (Some(K::F(x)), UnOp::FSqrt) => Some(Inst::FConst { dst: *dst, val: x.sqrt() }),
+                        (Some(K::F(x)), UnOp::FAbs) => Some(Inst::FConst { dst: *dst, val: x.abs() }),
+                        (Some(K::F(x)), UnOp::FFloor) => Some(Inst::FConst { dst: *dst, val: x.floor() }),
+                        (Some(K::F(x)), UnOp::FCeil) => Some(Inst::FConst { dst: *dst, val: x.ceil() }),
                         _ => None,
                     }
                 }

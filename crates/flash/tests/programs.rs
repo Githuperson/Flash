@@ -11,9 +11,16 @@ fn run_program(dir: &str, name: &str) {
     let want_exit: i32 = std::fs::read_to_string(root.join(dir).join(format!("{}.exit", name)))
         .map(|s| s.trim().parse().unwrap())
         .unwrap_or(0);
-    for release in [false, true] {
-        let mode = if release { "release" } else { "dev" };
-        let (b, r) = build_and_run(&src, release, &format!("{}-{}", name, mode), &[]);
+    // dev and release with Cranelift; release with LLVM when clang is installed
+    let mut configs: Vec<(bool, Option<&str>)> = vec![(false, None), (true, None)];
+    if clang_available() {
+        configs.push((true, Some("llvm")));
+    } else {
+        eprintln!("note: clang not found, skipping the LLVM backend for {}", name);
+    }
+    for (release, backend) in configs {
+        let mode = format!("{}{}", if release { "release" } else { "dev" }, backend.map(|b| format!("-{}", b)).unwrap_or_default());
+        let (b, r) = build_and_run_with(&src, release, backend, &format!("{}-{}", name, mode), &[]);
         assert!(b.status.success(), "{} ({}) failed to compile:\n{}", name, mode, text(&b.stderr));
         let r = r.unwrap();
         assert_eq!(text(&r.stdout), expected, "{} ({}): wrong output", name, mode);

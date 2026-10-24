@@ -1,0 +1,20 @@
+# Floating-point arithmetic: sum of Mandelbrot escape iterations over a 700x700 grid.
+fn mandel(cx: Float, cy: Float, max_iter: Int) -> Int:
+    x = 0.0
+    y = 0.0
+    i = 0
+    while i < max_iter and x * x + y * y <= 4.0:
+        t = x * x - y * y + cx
+        y = 2.0 * x * y + cy
+        x = t
+        i += 1
+    return i
+
+size = 700
+total = 0
+for py in 0..size:
+    for px in 0..size:
+        cx = float(px) / float(size) * 3.0 - 2.0
+        cy = float(py) / float(size) * 2.0 - 1.0
+        total += mandel(cx, cy, 300)
+say(total)

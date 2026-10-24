@@ -80,6 +80,10 @@ pub enum UnOp {
     Neg,
     Not,
     FNeg,
+    FSqrt,
+    FFloor,
+    FCeil,
+    FAbs,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

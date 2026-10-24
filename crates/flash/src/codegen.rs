@@ -17,10 +17,20 @@ use cranelift_object::{ObjectBuilder, ObjectModule};
 
 use crate::ir::{self as fir, BinOp, Callee, CastOp, CmpOp, Inst, Term, Ty, UnOp};
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum Backend {
+    /// Fast to compile; the default (pure Rust, no system dependencies).
+    #[default]
+    Cranelift,
+    /// Textual LLVM IR compiled by `clang`; slower to compile, better optimised code.
+    Llvm,
+}
+
 pub struct CodegenOptions {
     pub release: bool,
     /// Target triple; `None` means the host.
     pub target: Option<String>,
+    pub backend: Backend,
 }
 
 fn clif_ty(t: Ty) -> ir::Type {
@@ -57,6 +67,9 @@ pub fn make_isa(opts: &CodegenOptions) -> Result<OwnedTargetIsa, String> {
 }
 
 pub fn compile(m: &fir::Module, opts: &CodegenOptions) -> Result<Vec<u8>, String> {
+    if opts.backend == Backend::Llvm {
+        return crate::llvm::compile(m, opts);
+    }
     let isa = make_isa(opts)?;
     let call_conv = isa.default_call_conv();
     let builder = ObjectBuilder::new(isa, "flash_program", default_libcall_names()).map_err(|e| e.to_string())?;
@@ -261,6 +274,10 @@ fn emit_inst(
                 UnOp::Neg => b.ins().ineg(x),
                 UnOp::Not => b.ins().bnot(x),
                 UnOp::FNeg => b.ins().fneg(x),
+                UnOp::FSqrt => b.ins().sqrt(x),
+                UnOp::FFloor => b.ins().floor(x),
+                UnOp::FCeil => b.ins().ceil(x),
+                UnOp::FAbs => b.ins().fabs(x),
             };
             d!(dst, r);
         }

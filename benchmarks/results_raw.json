@@ -1,0 +1,493 @@
+{
+  "info": {
+    "machine": "Linux-6.18.44-fc-v153-x86_64-with-glibc2.39",
+    "cpu": "Intel(R) Xeon(R) Processor",
+    "python": "3.13.17",
+    "rustc": "rustc 1.97.0 (2d8144b78 2026-07-07)",
+    "cxx": "g++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0",
+    "runs": 5,
+    "date": "2026-10-24 10:20:56"
+  },
+  "results": [
+    {
+      "name": "int_loop",
+      "impl": {
+        "flash-dev": {
+          "compile_s": 0.11371554800007289,
+          "median_s": 1.048764915999982,
+          "best_s": 1.0464232310000625,
+          "rss_kib": 2232,
+          "size_bytes": 4308816,
+          "output": [
+            "1399999998"
+          ],
+          "correct": true
+        },
+        "flash-release": {
+          "compile_s": 0.053922563000014634,
+          "median_s": 0.37863468199975614,
+          "best_s": 0.37567422699976305,
+          "rss_kib": 2268,
+          "size_bytes": 336768,
+          "output": [
+            "1399999998"
+          ],
+          "correct": true
+        },
+        "rust -O": {
+          "compile_s": 0.09366726899997957,
+          "median_s": 0.3232407069999681,
+          "best_s": 0.32233061200031443,
+          "rss_kib": 2232,
+          "size_bytes": 342864,
+          "output": [
+            "1399999998"
+          ],
+          "correct": true
+        },
+        "c++ -O3": {
+          "compile_s": 0.04918741299979956,
+          "median_s": 0.32224909099977594,
+          "best_s": 0.3210003819999656,
+          "rss_kib": 1556,
+          "size_bytes": 14472,
+          "output": [
+            "1399999998"
+          ],
+          "correct": true
+        },
+        "c++ -O0": {
+          "compile_s": 0.042200717000014265,
+          "median_s": 0.7755537769999137,
+          "best_s": 0.7745407409997824,
+          "rss_kib": 1556,
+          "size_bytes": 15968,
+          "output": [
+            "1399999998"
+          ],
+          "correct": true
+        }
+      }
+    },
+    {
+      "name": "fib",
+      "impl": {
+        "flash-dev": {
+          "compile_s": 0.09076648700010992,
+          "median_s": 0.15733591800017166,
+          "best_s": 0.15583303799985515,
+          "rss_kib": 2244,
+          "size_bytes": 4308840,
+          "output": [
+            "39088169"
+          ],
+          "correct": true
+        },
+        "flash-release": {
+          "compile_s": 0.05346004200009702,
+          "median_s": 0.15667525899971224,
+          "best_s": 0.1559752899997875,
+          "rss_kib": 2272,
+          "size_bytes": 336768,
+          "output": [
+            "39088169"
+          ],
+          "correct": true
+        },
+        "rust -O": {
+          "compile_s": 0.08981732200027182,
+          "median_s": 0.10279812499993568,
+          "best_s": 0.10178545500002656,
+          "rss_kib": 2224,
+          "size_bytes": 342848,
+          "output": [
+            "39088169"
+          ],
+          "correct": true
+        },
+        "c++ -O3": {
+          "compile_s": 0.06894050900018556,
+          "median_s": 0.05592676499964,
+          "best_s": 0.05543595200015261,
+          "rss_kib": 1556,
+          "size_bytes": 14472,
+          "output": [
+            "39088169"
+          ],
+          "correct": true
+        },
+        "c++ -O0": {
+          "compile_s": 0.04013140300003215,
+          "median_s": 0.2657425319998765,
+          "best_s": 0.26504192099991997,
+          "rss_kib": 1556,
+          "size_bytes": 15992,
+          "output": [
+            "39088169"
+          ],
+          "correct": true
+        }
+      }
+    },
+    {
+      "name": "mandelbrot",
+      "impl": {
+        "flash-dev": {
+          "compile_s": 0.08711703100016166,
+          "median_s": 0.11251044000027832,
+          "best_s": 0.11098838199995953,
+          "rss_kib": 2252,
+          "size_bytes": 4308848,
+          "output": [
+            "39847596"
+          ],
+          "correct": true
+        },
+        "flash-release": {
+          "compile_s": 0.05443412400018133,
+          "median_s": 0.11228912700016735,
+          "best_s": 0.11187418899999102,
+          "rss_kib": 2224,
+          "size_bytes": 336768,
+          "output": [
+            "39847596"
+          ],
+          "correct": true
+        },
+        "rust -O": {
+          "compile_s": 0.09721949900040272,
+          "median_s": 0.0934351890000471,
+          "best_s": 0.0933137249999163,
+          "rss_kib": 2244,
+          "size_bytes": 343088,
+          "output": [
+            "39847596"
+          ],
+          "correct": true
+        },
+        "c++ -O3": {
+          "compile_s": 0.04954284199993708,
+          "median_s": 0.09226163399989673,
+          "best_s": 0.09180983599981118,
+          "rss_kib": 1556,
+          "size_bytes": 14472,
+          "output": [
+            "39847596"
+          ],
+          "correct": true
+        },
+        "c++ -O0": {
+          "compile_s": 0.04281613600005585,
+          "median_s": 0.20717037399981564,
+          "best_s": 0.20690080700023827,
+          "rss_kib": 1556,
+          "size_bytes": 16008,
+          "output": [
+            "39847596"
+          ],
+          "correct": true
+        }
+      }
+    },
+    {
+      "name": "sieve",
+      "impl": {
+        "flash-dev": {
+          "compile_s": 0.09072981300005267,
+          "median_s": 0.12990942200030986,
+          "best_s": 0.1278400999999576,
+          "rss_kib": 21508,
+          "size_bytes": 4330432,
+          "output": [
+            "1270607"
+          ],
+          "correct": true
+        },
+        "flash-release": {
+          "compile_s": 0.04876708100027827,
+          "median_s": 0.13102657200033718,
+          "best_s": 0.12882148300013796,
+          "rss_kib": 21504,
+          "size_bytes": 353160,
+          "output": [
+            "1270607"
+          ],
+          "correct": true
+        },
+        "rust -O": {
+          "compile_s": 0.12503090600012,
+          "median_s": 0.12026813599959496,
+          "best_s": 0.11389517300040097,
+          "rss_kib": 21532,
+          "size_bytes": 342952,
+          "output": [
+            "1270607"
+          ],
+          "correct": true
+        },
+        "c++ -O3": {
+          "compile_s": 0.15735774599988872,
+          "median_s": 0.10585280899977079,
+          "best_s": 0.1028789179999876,
+          "rss_kib": 22924,
+          "size_bytes": 14568,
+          "output": [
+            "1270607"
+          ],
+          "correct": true
+        },
+        "c++ -O0": {
+          "compile_s": 0.14273569699980726,
+          "median_s": 0.20876493800005846,
+          "best_s": 0.20718030900025042,
+          "rss_kib": 22924,
+          "size_bytes": 20488,
+          "output": [
+            "1270607"
+          ],
+          "correct": true
+        }
+      }
+    },
+    {
+      "name": "strings",
+      "impl": {
+        "flash-dev": {
+          "compile_s": 0.08533076599997003,
+          "median_s": 0.04745056799993108,
+          "best_s": 0.0463544140002341,
+          "rss_kib": 30936,
+          "size_bytes": 4330968,
+          "output": [
+            "2288889 300000 1988890 122853"
+          ],
+          "correct": true
+        },
+        "flash-release": {
+          "compile_s": 0.05078122699978849,
+          "median_s": 0.06169488800014733,
+          "best_s": 0.04791610900019805,
+          "rss_kib": 30920,
+          "size_bytes": 353160,
+          "output": [
+            "2288889 300000 1988890 122853"
+          ],
+          "correct": true
+        },
+        "rust -O": {
+          "compile_s": 0.1928584850002153,
+          "median_s": 0.04260131499995623,
+          "best_s": 0.038554539999950066,
+          "rss_kib": 37020,
+          "size_bytes": 348040,
+          "output": [
+            "2288889 300000 1988890 122853"
+          ],
+          "correct": true
+        },
+        "c++ -O3": {
+          "compile_s": 0.2924325239996506,
+          "median_s": 0.04016107200004626,
+          "best_s": 0.03753990099994553,
+          "rss_kib": 42448,
+          "size_bytes": 18664,
+          "output": [
+            "2288889 300000 1988890 122853"
+          ],
+          "correct": true
+        },
+        "c++ -O0": {
+          "compile_s": 0.21149459000025672,
+          "median_s": 0.06900362399983351,
+          "best_s": 0.0671652709997943,
+          "rss_kib": 42448,
+          "size_bytes": 29360,
+          "output": [
+            "2288889 300000 1988890 122853"
+          ],
+          "correct": true
+        }
+      }
+    },
+    {
+      "name": "alloc",
+      "impl": {
+        "flash-dev": {
+          "compile_s": 0.0839114119999067,
+          "median_s": 0.3831127580001521,
+          "best_s": 0.3797088689998418,
+          "rss_kib": 2212,
+          "size_bytes": 4330416,
+          "output": [
+            "48000000"
+          ],
+          "correct": true
+        },
+        "flash-release": {
+          "compile_s": 0.06813385500026925,
+          "median_s": 0.38155487399990307,
+          "best_s": 0.37215241900003093,
+          "rss_kib": 2256,
+          "size_bytes": 353160,
+          "output": [
+            "48000000"
+          ],
+          "correct": true
+        },
+        "rust -O": {
+          "compile_s": 0.12225755899999058,
+          "median_s": 0.19679322600040905,
+          "best_s": 0.19447859299998527,
+          "rss_kib": 2212,
+          "size_bytes": 346240,
+          "output": [
+            "48000000"
+          ],
+          "correct": true
+        },
+        "c++ -O3": {
+          "compile_s": 0.2526960670002154,
+          "median_s": 0.08255366999992475,
+          "best_s": 0.08190678799974194,
+          "rss_kib": 3816,
+          "size_bytes": 14568,
+          "output": [
+            "48000000"
+          ],
+          "correct": true
+        },
+        "c++ -O0": {
+          "compile_s": 0.208740865999971,
+          "median_s": 0.4091651250000723,
+          "best_s": 0.4052579939998395,
+          "rss_kib": 3820,
+          "size_bytes": 26632,
+          "output": [
+            "48000000"
+          ],
+          "correct": true
+        }
+      }
+    },
+    {
+      "name": "nbody",
+      "impl": {
+        "flash-dev": {
+          "compile_s": 0.08888698300006581,
+          "median_s": 0.5360182570002507,
+          "best_s": 0.5338585049998983,
+          "rss_kib": 2272,
+          "size_bytes": 4334848,
+          "output": [
+            "-169075163\n-169083133"
+          ],
+          "correct": true
+        },
+        "flash-release": {
+          "compile_s": 0.07200063000027512,
+          "median_s": 0.3016123349998452,
+          "best_s": 0.2988547859999926,
+          "rss_kib": 2268,
+          "size_bytes": 353160,
+          "output": [
+            "-169075163\n-169083133"
+          ],
+          "correct": true
+        },
+        "rust -O": {
+          "compile_s": 0.1401563590002297,
+          "median_s": 0.16263888099956603,
+          "best_s": 0.16209932399988247,
+          "rss_kib": 2248,
+          "size_bytes": 347520,
+          "output": [
+            "-169075163\n-169083133"
+          ],
+          "correct": true
+        },
+        "c++ -O3": {
+          "compile_s": 0.26316793799969673,
+          "median_s": 0.21828778899998724,
+          "best_s": 0.216966049000348,
+          "rss_kib": 3796,
+          "size_bytes": 14568,
+          "output": [
+            "-169075163\n-169083133"
+          ],
+          "correct": true
+        },
+        "c++ -O0": {
+          "compile_s": 0.24599547600018923,
+          "median_s": 1.7005474620000314,
+          "best_s": 1.6813721220000843,
+          "rss_kib": 3808,
+          "size_bytes": 24144,
+          "output": [
+            "-169075163\n-169083133"
+          ],
+          "correct": true
+        }
+      }
+    },
+    {
+      "name": "matmul",
+      "impl": {
+        "flash-dev": {
+          "compile_s": 0.09168714299994463,
+          "median_s": 0.045792453000103706,
+          "best_s": 0.045753279000109615,
+          "rss_kib": 5144,
+          "size_bytes": 4330616,
+          "output": [
+            "2204100000"
+          ],
+          "correct": true
+        },
+        "flash-release": {
+          "compile_s": 0.05478913599972657,
+          "median_s": 0.038574421999783226,
+          "best_s": 0.038539345000117464,
+          "rss_kib": 5164,
+          "size_bytes": 353160,
+          "output": [
+            "2204100000"
+          ],
+          "correct": true
+        },
+        "rust -O": {
+          "compile_s": 0.14545047399997202,
+          "median_s": 0.01536135700007435,
+          "best_s": 0.015096790999905352,
+          "rss_kib": 5148,
+          "size_bytes": 346032,
+          "output": [
+            "2204100000"
+          ],
+          "correct": true
+        },
+        "c++ -O3": {
+          "compile_s": 0.23633413700008532,
+          "median_s": 0.009324585000285879,
+          "best_s": 0.009115260999806196,
+          "rss_kib": 5952,
+          "size_bytes": 14568,
+          "output": [
+            "2204100000"
+          ],
+          "correct": true
+        },
+        "c++ -O0": {
+          "compile_s": 0.18781647500009058,
+          "median_s": 0.11534198900017145,
+          "best_s": 0.11489741300010792,
+          "rss_kib": 5984,
+          "size_bytes": 39992,
+          "output": [
+            "2204100000"
+          ],
+          "correct": true
+        }
+      }
+    }
+  ]
+}

@@ -2,7 +2,7 @@
 
 pub const BUILTIN_NAMES: &[&str] = &[
     "say", "print", "str", "int", "float", "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "len", "append", "pop",
-    "copy", "abs", "min", "max", "sqrt", "floor", "ceil", "sin", "cos", "tan", "exp", "ln", "pow", "exit", "assert",
+    "copy", "fill", "abs", "min", "max", "sqrt", "floor", "ceil", "sin", "cos", "tan", "exp", "ln", "pow", "exit", "assert",
     "now_ns", "args", "read_line", "upper", "lower", "trim", "contains", "starts_with", "ends_with", "replace", "split",
     "join", "find", "substr", "byte_at", "parse_int", "parse_float", "read_file", "write_file", "append_file",
     "file_exists", "remove_file", "env_var", "path_join", "path_filename", "path_parent", "path_extension",

@@ -389,3 +389,25 @@ fn drops_are_emitted_for_owned_locals_and_conditional_moves_use_flags() {
     let m = lowered("fn eat(own s: String):\n    say(s)\ns = \"a\" + \"b\"\nif len(s) > 1:\n    eat(s)\n", false);
     assert!(main_fn(&m).blocks.len() > 3, "{}", m);
 }
+
+fn uses_bounds_check(src: &str) -> bool {
+    lowered(src, false).externs.iter().any(|e| e.name == "fl_panic_bounds")
+}
+
+#[test]
+fn bounds_checks_are_removed_only_when_provably_safe() {
+    // provably in range: index is the loop variable of 0..len(xs) and xs is not modified
+    assert!(!uses_bounds_check("xs = [1, 2, 3]\ntotal = 0\nfor i in 0..len(xs):\n    total += xs[i]\nsay(total)\n"));
+    // an arbitrary index keeps the check
+    assert!(uses_bounds_check("xs = [1, 2, 3]\ni = 2\nsay(xs[i])\n"));
+    // the list shrinks inside the loop: keep the check
+    assert!(uses_bounds_check("xs = [1, 2, 3]\nfor i in 0..len(xs):\n    say(xs[i])\n    pop(xs)\n"));
+    // the loop variable is reassigned: keep the check
+    assert!(uses_bounds_check("xs = [1, 2, 3]\nfor i in 0..len(xs):\n    i = i + 5\n    say(xs[i])\n"));
+    // off-by-one: i + 1 may be out of range
+    assert!(uses_bounds_check("xs = [1, 2, 3]\nfor i in 0..len(xs):\n    say(xs[i + 1])\n"));
+    // inclusive range goes one past the end
+    assert!(uses_bounds_check("xs = [1, 2, 3]\nfor i in 0..=len(xs):\n    say(xs[i])\n"));
+    // a different list
+    assert!(uses_bounds_check("xs = [1, 2, 3]\nys = [1]\nfor i in 0..len(xs):\n    say(ys[i])\n"));
+}

@@ -1,0 +1,29 @@
+# Collections of collections: 300x300 matrix multiplication with List[List[Float]].
+fn make(n: Int, seed: Int) -> List[List[Float]]:
+    m: List[List[Float]] = []
+    for i in 0..n:
+        row: List[Float] = []
+        for j in 0..n:
+            append(row, float((i * 31 + j * 17 + seed) % 100) / 10.0)
+        append(m, row)
+    return m
+
+fn multiply(a: List[List[Float]], b: List[List[Float]], n: Int) -> List[List[Float]]:
+    c: List[List[Float]] = []
+    for i in 0..n:
+        row = fill(n, 0.0)
+        for k in 0..n:
+            aik = a[i][k]
+            for j in 0..n:
+                row[j] = row[j] + aik * b[k][j]
+        append(c, row)
+    return c
+
+n = 300
+a = make(n, 1)
+b = make(n, 2)
+c = multiply(a, b, n)
+trace = 0.0
+for i in 0..n:
+    trace = trace + c[i][i]
+say(int(trace * 1000.0))

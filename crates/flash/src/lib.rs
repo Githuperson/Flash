@@ -14,6 +14,7 @@ pub mod fmt;
 pub mod hir;
 pub mod ir;
 pub mod lexer;
+pub mod llvm;
 pub mod lower;
 pub mod module;
 pub mod opt;

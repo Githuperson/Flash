@@ -18,6 +18,7 @@ pub struct BuildOptions {
     pub emit_ir: bool,
     /// Only produce the object file (needed when cross-compiling without a cross linker).
     pub emit_obj_only: bool,
+    pub backend: crate::codegen::Backend,
     /// Extra Flash source appended to the root module (used by `flash test`).
     pub source_suffix: Option<String>,
 }
@@ -347,7 +348,7 @@ pub fn build(src: &Path, opts: &BuildOptions) -> Result<(PathBuf, BuildTimings),
         println!("{}", module);
     }
     let t1 = std::time::Instant::now();
-    let cg_opts = crate::codegen::CodegenOptions { release: opts.release, target: opts.target.clone() };
+    let cg_opts = crate::codegen::CodegenOptions { release: opts.release, target: opts.target.clone(), backend: opts.backend };
     // The code generator panics on unsupported targets; report that as an ordinary error.
     let prev_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(|_| {}));

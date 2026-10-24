@@ -1,0 +1,13 @@
+# Allocation-heavy: build and free 200,000 lists of 20 small structs, each owning a String.
+struct Node:
+    value: Int
+    label: String
+
+total = 0
+for i in 0..200000:
+    nodes: List[Node] = []
+    for j in 0..20:
+        append(nodes, Node(value=j, label="n" + str(j)))
+    for nd in nodes:
+        total += nd.value + len(nd.label)
+say(total)

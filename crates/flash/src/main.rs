@@ -19,6 +19,8 @@ OPTIONS:
     -o <path>        Output file for `build`
     --target <triple>  Cross-compile (object file only, e.g. aarch64-apple-darwin)
     --emit-ir        Print the intermediate representation
+    --backend <b>    Code generator: `cranelift` (default) or `llvm` (needs clang)
+    --emit-llvm      Print the LLVM IR instead of building
 ";
 
 fn main() -> ExitCode {
@@ -36,6 +38,7 @@ fn main() -> ExitCode {
     let mut opts = BuildOptions::default();
     let mut file: Option<PathBuf> = None;
     let mut opts_check = false;
+    let mut opts_emit_llvm = false;
     let mut opts_stdout = false;
     let mut prog_args: Vec<String> = vec![];
     let mut i = 0;
@@ -43,6 +46,20 @@ fn main() -> ExitCode {
         match rest[i].as_str() {
             "--release" => opts.release = true,
             "--emit-ir" => opts.emit_ir = true,
+            "--emit-llvm" => {
+                opts_emit_llvm = true;
+            }
+            "--backend" => {
+                i += 1;
+                opts.backend = match rest.get(i).map(|s| s.as_str()) {
+                    Some("cranelift") => flashc::codegen::Backend::Cranelift,
+                    Some("llvm") => flashc::codegen::Backend::Llvm,
+                    other => {
+                        eprintln!("--backend must be `cranelift` or `llvm` (got {:?})", other);
+                        return ExitCode::from(2);
+                    }
+                };
+            }
             "--check" => opts_check = true,
             "--stdout" => opts_stdout = true,
             "-o" => {
@@ -78,6 +95,20 @@ fn main() -> ExitCode {
             match driver::check(&f) {
                 Ok(()) => {
                     println!("OK: {} has no errors.", f.display());
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprint!("{}", e);
+                    ExitCode::from(1)
+                }
+            }
+        }
+        "build" if opts_emit_llvm => {
+            let Some(f) = file else { return usage("build") };
+            match driver::frontend(&f, None) {
+                Ok(fe) => {
+                    let m = driver::lower_and_optimise(&fe.program, opts.release);
+                    print!("{}", flashc::llvm::emit_ir(&m));
                     ExitCode::SUCCESS
                 }
                 Err(e) => {

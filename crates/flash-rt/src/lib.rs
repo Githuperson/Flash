@@ -46,7 +46,9 @@ static LIVE_ALLOCS: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64:
 
 #[no_mangle]
 pub unsafe extern "C" fn fl_alloc(size: i64) -> *mut u8 {
-    LIVE_ALLOCS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    // Plain load/store: the runtime is single-threaded, and a locked read-modify-write per
+    // allocation would be measurable in allocation-heavy programs.
+    LIVE_ALLOCS.store(LIVE_ALLOCS.load(std::sync::atomic::Ordering::Relaxed) + 1, std::sync::atomic::Ordering::Relaxed);
     let size = (size as usize).max(8);
     let p = alloc(Layout::from_size_align_unchecked(size, 8));
     if p.is_null() {
@@ -58,7 +60,7 @@ pub unsafe extern "C" fn fl_alloc(size: i64) -> *mut u8 {
 #[no_mangle]
 pub unsafe extern "C" fn fl_free(p: *mut u8, size: i64) {
     if !p.is_null() {
-        LIVE_ALLOCS.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+        LIVE_ALLOCS.store(LIVE_ALLOCS.load(std::sync::atomic::Ordering::Relaxed) - 1, std::sync::atomic::Ordering::Relaxed);
         dealloc(p, Layout::from_size_align_unchecked((size as usize).max(8), 8));
     }
 }

@@ -1,0 +1,5 @@
+# Integer loop: 400 million iterations of integer arithmetic.
+total = 0
+for i in 0..400000000:
+    total += (i * i) % 7 + (i & 3)
+say(total)

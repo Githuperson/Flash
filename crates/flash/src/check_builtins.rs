@@ -140,6 +140,23 @@ impl<'a> Checker<'a> {
                 let ty = h.ty.clone();
                 Ok(self.mk(B::Copy, vec![h], ty, span))
             }
+            "fill" => {
+                self.nargs(name, args, 2, span)?;
+                let n = self.arg_of(args[0], &Type::Int(INT), name, "The length", Ctx::Borrow)?;
+                let v = self.expr(args[1], match expected {
+                    Some(Type::List(t)) => Some(&**t),
+                    _ => None,
+                }, Ctx::Borrow)?;
+                if !v.ty.is_copy() {
+                    let tn = self.tn(&v.ty);
+                    return self.fail(
+                        Diagnostic::error(args[1].span, format!("fill() repeats numbers, Bool or None, but this is {}.", tn))
+                            .help("To build a list of strings or structs, use a loop with append()."),
+                    );
+                }
+                let ty = Type::List(Box::new(v.ty.clone()));
+                Ok(self.mk(B::Fill, vec![n, v], ty, span))
+            }
             "abs" => {
                 self.nargs(name, args, 1, span)?;
                 let h = self.expr(args[0], expected, Ctx::Borrow)?;

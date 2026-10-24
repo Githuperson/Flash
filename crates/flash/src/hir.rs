@@ -59,6 +59,7 @@ pub enum Builtin {
     Append,
     Pop,
     Copy,
+    Fill,
     Abs,
     Min,
     Max,

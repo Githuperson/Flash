@@ -1,0 +1,18 @@
+# Collections: sieve of Eratosthenes over a list of 20 million Bools.
+n = 20000000
+is_prime = fill(n + 1, True)
+is_prime[0] = False
+is_prime[1] = False
+i = 2
+while i * i <= n:
+    if is_prime[i]:
+        j = i * i
+        while j <= n:
+            is_prime[j] = False
+            j += i
+    i += 1
+count = 0
+for k in 0..=n:
+    if is_prime[k]:
+        count += 1
+say(count)
