@@ -169,7 +169,7 @@ impl<'a> Checker<'a> {
             }
             "min" | "max" => {
                 self.nargs(name, args, 2, span)?;
-                let (a, b) = if matches!(args[0].kind, crate::ast::ExprKind::Int(_)) && !matches!(args[1].kind, crate::ast::ExprKind::Int(_)) {
+                let (a, b) = if is_int_lit(args[0]) && !is_int_lit(args[1]) {
                     let b = self.expr(args[1], expected, Ctx::Borrow)?;
                     let a = self.expr(args[0], Some(&b.ty), Ctx::Borrow)?;
                     (a, b)

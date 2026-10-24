@@ -587,10 +587,12 @@ impl<'a> Parser<'a> {
             _ => return self.postfix_expr(),
         };
         let sp = self.bump().span;
+        // Fold `-literal` (a minus directly in front of a number token) so that the minimum value
+        // `-9223372036854775808` is representable; `-(-x)` and `-(literal)` stay real operations.
+        let direct_literal = op == UnOp::Neg && matches!(self.peek(), Tok::Int(_) | Tok::Float(_));
         let e = self.unary_expr()?;
         let span = sp.to(e.span);
-        // Fold negative literals so `-9223372036854775808` is representable.
-        if op == UnOp::Neg {
+        if direct_literal {
             match e.kind {
                 ExprKind::Int(v) => return Ok(Expr { kind: ExprKind::Int(-v), span }),
                 ExprKind::Float(v) => return Ok(Expr { kind: ExprKind::Float(-v), span }),

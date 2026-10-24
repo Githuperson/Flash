@@ -78,8 +78,19 @@ pub fn he(kind: HKind, ty: Type, span: Span) -> HExpr {
     HExpr { kind, ty, span }
 }
 
-fn is_int_lit(e: &Expr) -> bool {
-    matches!(e.kind, ExprKind::Int(_))
+/// An integer constant expression built only from literals (`7`, `-1`, `~0`, `(1 + 2) * 3`).
+/// Such an expression has no type of its own: it takes the integer type of its context.
+pub fn is_int_lit(e: &Expr) -> bool {
+    match &e.kind {
+        ExprKind::Int(_) => true,
+        ExprKind::Unary(UnOp::Neg | UnOp::BitNot, a) => is_int_lit(a),
+        ExprKind::Binary(
+            BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Rem | BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor | BinOp::Shl | BinOp::Shr,
+            a,
+            b,
+        ) => is_int_lit(a) && is_int_lit(b),
+        _ => false,
+    }
 }
 
 impl<'a> Checker<'a> {
