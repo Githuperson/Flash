@@ -101,7 +101,9 @@ call (function / runtime import), address of static data or a stack slot, select
 * **Drop and clone glue** are synthesised per type on demand as IR functions (`List[Struct{String,…}]` loops over the elements, drops each field, frees the buffers); recursion through types is handled by reserving the function slot before generating the body.
 * **Checks:** list indexing is bounds checked (`index <u len`, one unsigned compare); integer division and remainder test for zero and for `MIN / -1`; both call small panic blocks.
 * **Bounds-check elimination:** `xs[i]` inside `for i in 0..len(xs)` loses its check if the loop body provably does not change `xs` (no `append`/`pop`/assignment/move/`mut` argument) or `i`.
+* **Alias classes:** loads and stores of list lengths, list data pointers, list elements (by machine type) and struct fields carry a `MemTag`. The LLVM back end turns tags into TBAA metadata and the Cranelift back end into alias regions, so a store to a `Float` element or a field no longer forces a reload of the list header; this alone made matrix multiplication 2.2× faster under LLVM (see `benchmarks/RESULTS.md`).
 * **Plugins:** a call builds a `FlashValue[]` in a stack slot and calls `fl_plugin_call`; a fallible function wraps the status into a `Result`.
+* **`extern fn`:** a call to a C-ABI function widens integers to 64 bits, passes a `String` as `(ptr + 16, len)` and normalises a `Bool` result; the linker resolves the symbol (`--link`, `-l`, `-L`).
 
 ### Optimiser (`opt.rs`)
 Per function, iterated to a fixed point: constant folding and propagation of single-definition constants; copy propagation; algebraic identities; folding of branches on constants;
@@ -144,7 +146,7 @@ Executables are linked with the system C compiler driver (`cc`, override with `F
 * **`flash fmt`** is token based: it re-spaces tokens line by line, normalises indentation, and preserves comments and literals verbatim, so it cannot change the meaning of a program (the tests verify formatting is idempotent and behaviour-preserving over all repository programs).
 * **`flash test`** compiles each file once with a generated dispatcher appended (`if args()[0] == "test_x": test_x()`) and runs every `test_*` function in its own process.
 * **`flashpkg`** (`pkg.rs`) implements local-path packages, `flash.lock` with SHA-256 source hashes, native-package requirement checks, and `FLASH_PATH`/`FLASH_PLUGIN_PATH` injection.
-* **Incremental compilation:** not implemented. A whole program is compiled every time; at ~10–100 ms for typical programs this has not been a bottleneck. Imported modules are parsed once per build. The natural next step is caching per-module typed HIR/IR keyed by content hash.
+* **Build cache (whole-program incremental compilation):** after the front end runs (always — it is a few milliseconds and is what reports errors), `build`/`run` hash every source text, the build options, the plugin descriptors and the identity of the compiler and runtime; on a hit the previously linked executable is copied and lowering, code generation and linking (the ~100 ms part) are skipped. **Per-module** incremental compilation is not implemented: changing one file recompiles the whole program. The natural next step is caching typed HIR/IR per module keyed by content hash.
 
 ## 8. Platform status
 
@@ -157,6 +159,6 @@ Executables are linked with the system C compiler driver (`cc`, override with `F
 ## 9. Known limitations / roadmap
 
 Language: no tuples, maps, user generics, methods, closures, concurrency or `unsafe` (see LANGUAGE_SPEC §16). Compiler: no incremental compilation; generic function bodies are only checked when used;
-`?` leaks owned temporaries evaluated earlier in the same expression; native stack overflow is not detected; Cranelift output is slower than LLVM (measured in `benchmarks/RESULTS.md`).
+`?` leaks owned temporaries evaluated earlier in the same expression; native stack overflow is not detected; Cranelift output is slower than LLVM, by 1.0–2.5× on the benchmark programs (measured in `benchmarks/RESULTS.md`).
 Next steps in rough priority order: tuples and maps; user generics/traits; reference locals (`ref x = xs[i]`) with the same rules as borrowed parameters; per-module caching; static linking of native libraries;
 process isolation for untrusted plugins; Windows/macOS CI; an LSP server built on the existing parser and checker; a thread-safe ownership model (`Send` transfer and channels).

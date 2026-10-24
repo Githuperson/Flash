@@ -28,7 +28,7 @@ for i in 0..3:                  # 0, 1, 2   (the upper bound is excluded; use 0.
 > **Status: v0.1, a working prototype.** The compiler, runtime, formatter, test runner, local package manager and the Rust/C++
 > plugin interface all work and are covered by automated tests — on **Linux x86-64**, which is the only platform this was built and run on.
 > Code generation for macOS (including Apple Silicon), Windows and AArch64 Linux is implemented in the compiler but linking and running there is **untested**.
-> Performance: measured, not claimed — Flash is currently **slower** than Rust and C++ on every benchmark (see [Performance](#performance)).
+> Performance: measured, not claimed (see [Performance](#performance)). With the default Cranelift backend Flash is 1.0–2.4× slower than Rust on the eight benchmarks; with the optional LLVM backend it is roughly on par with Rust on most of them and still slower than C++ on three.
 
 ## What works
 
@@ -37,14 +37,15 @@ for i in 0..3:                  # 0, 1, 2   (the upper bound is excluded; use 0.
 * Functions with inferred parameter/return types (checked per call signature), recursion, keyword arguments, modules (`import`), f-strings, `Result` error handling with `?`.
 * **Memory safety without a GC:** an ownership model (move semantics for strings/lists/structs, borrowed parameters, `mut`/`own` parameter modes) enforced at compile time, deterministic cleanup, bounds-checked lists.
   No use-after-free or double-free in safe code — verified by tests that count allocations. Details and limits: [LANGUAGE_SPEC.md §10](LANGUAGE_SPEC.md#10-ownership-and-memory-safety).
-* Native code generation with **Cranelift** (default; fast compiles) or **LLVM via clang** (`--backend llvm`, better optimised); dev and release builds; constant folding, dead-code elimination, inlining, provable bounds-check elimination.
+* Native code generation with **Cranelift** (default; fast compiles) or **LLVM via clang** (`--backend llvm`, better optimised); dev and release builds; constant folding, dead-code elimination, inlining, provable bounds-check elimination, type-based alias analysis; a build cache that skips unchanged programs.
 * A standard library of built-ins plus modules in `stdlib/` (`std.math`, `std.text`, `std.bench`): strings, math, lists, files, paths, environment, arguments, stdin, timing.
+* **Static linking** of C, C++ (via `extern "C"`) and `no_std` Rust libraries with `extern fn` declarations and `--link`.
 * **Rust and C++ plugins** loaded dynamically (`.so` / `.dylib` / `.dll`) with ABI-version, metadata and signature validation, optional SHA-256 pinning, error propagation (panics and exceptions never cross the boundary). Examples for both languages. [PLUGIN_ABI.md](PLUGIN_ABI.md)
 * Tools: `flash run/build/check/test/fmt`, and `flashpkg` (local packages, `flash.lock` with integrity hashes).
 
 ## What does not exist yet
 
-Tuples, maps, user generics/traits, methods, closures, threads, `unsafe`, static linking of native libraries, process-isolated plugins, incremental compilation, an LSP server,
+Tuples, maps, user generics/traits, methods, closures, threads, `unsafe`, strings/structs across `extern fn`, process-isolated plugins, per-module incremental compilation (only whole-program caching exists), an LSP server,
 a package registry, Windows linking. The full list is in [LANGUAGE_SPEC.md §16](LANGUAGE_SPEC.md#16-not-implemented-yet) and [ARCHITECTURE.md §9](ARCHITECTURE.md#9-known-limitations--roadmap).
 
 ## Build
@@ -122,6 +123,26 @@ say(error_message(geometry.checked_sqrt(-4.0)))  # errors come back as Results
 How to write, build (Linux, macOS, Windows) and load plugins, the ownership rules at the boundary, and the trust model: [PLUGIN_ABI.md](PLUGIN_ABI.md).
 **Plugins are native code with full access to your process; the loader prints a warning and the library's SHA-256 each time one is loaded. ABI validation does not make an untrusted plugin safe.**
 
+## Static linking
+
+```bash
+make -C examples/static_link                                   # builds libmathlib.a (C), libstats.a (C++), librust_static.a (no_std Rust)
+flash run examples/static_link/main.flash --link examples/static_link/build/libmathlib.a \
+    --link examples/static_link/build/libstats.a -lstdc++
+```
+
+```python
+extern fn c_gcd(a: Int, b: Int) -> Int          # a C-ABI symbol provided by a linked library
+say(c_gcd(84, 36))
+```
+
+Flash trusts the declaration (it cannot verify the C signature); types are limited to integers, `Float`, `Bool` and borrowed `String` arguments. Details: [LANGUAGE_SPEC.md](LANGUAGE_SPEC.md#statically-linked-native-libraries-extern-fn).
+
+## Build cache
+
+`flash build` and `flash run` store the linked executable in `~/.cache/flash` (or `$FLASH_CACHE_DIR`) keyed by a hash of every source file, the options, the plugin signatures and the compiler/runtime
+identity; an unchanged program is reused without lowering, code generation or linking (`--no-cache` disables it, the newest 64 entries are kept). This is whole-program caching, not per-module incremental compilation.
+
 ## Packages
 
 ```bash
@@ -148,12 +169,36 @@ and plugins: real calls into the Rust and C++ plugins plus nine ABI-validation f
 
 ## Performance
 
-Measured with `python3 benchmarks/run.py` (Rust `-C opt-level=3`, C++ `-O3`, Flash `--release`; identical algorithms; median of 5 runs). The latest full results, including compile times,
+Measured with `python3 benchmarks/run.py` (Rust `-C opt-level=3`, C++ `-O3`, Flash `--release`; identical algorithms; median of 7 runs). The latest full results, including compile times,
 peak memory and executable sizes, are in [benchmarks/RESULTS.md](benchmarks/RESULTS.md). Summary on the machine used here (Linux x86-64 Xeon):
 
-SEE_RESULTS_PLACEHOLDER
+Run time in seconds (median of 7; lower is better):
 
-**Flash is not faster than Rust or C++** on these benchmarks. Cranelift trades optimisation for compile speed; the LLVM backend narrows the gap. The numbers describe eight small programs on one machine and say nothing general.
+| benchmark | flash-dev | flash-release | flash-release-llvm | rust -O | c++ -O3 | c++ -O0 |
+|---|---|---|---|---|---|---|
+| int_loop | 1.052 | 0.377 | 0.324 | 0.324 | 0.322 | 0.774 |
+| fib | 0.156 | 0.156 | 0.096 | 0.102 | 0.056 | 0.264 |
+| mandelbrot | 0.111 | 0.112 | 0.095 | 0.093 | 0.092 | 0.207 |
+| sieve | 0.136 | 0.131 | 0.113 | 0.122 | 0.113 | 0.219 |
+| strings | 0.045 | 0.045 | 0.042 | 0.044 | 0.040 | 0.070 |
+| alloc | 0.196 | 0.197 | 0.174 | 0.197 | 0.081 | 0.407 |
+| nbody | 0.541 | 0.278 | 0.213 | 0.163 | 0.218 | 1.698 |
+| matmul | 0.046 | 0.037 | 0.016 | 0.015 | 0.010 | 0.116 |
+
+Flash run time divided by Rust / C++ run time (above 1.00 means Flash is slower):
+
+| benchmark | cranelift / rust | cranelift / c++ -O3 | llvm / rust | llvm / c++ -O3 |
+|---|---|---|---|---|
+| int_loop | 1.16x | 1.17x | 1.00x | 1.01x |
+| fib | 1.53x | 2.79x | 0.94x | 1.71x |
+| mandelbrot | 1.20x | 1.22x | 1.02x | 1.03x |
+| sieve | 1.07x | 1.16x | 0.92x | 1.00x |
+| strings | 1.02x | 1.12x | 0.95x | 1.04x |
+| alloc | 1.00x | 2.42x | 0.89x | 2.14x |
+| nbody | 1.71x | 1.28x | 1.31x | 0.98x |
+| matmul | 2.42x | 3.90x | 1.06x | 1.70x |
+
+**What this does and does not show.** With the default Cranelift backend Flash is slower than Rust on 7 of 8 programs (1.0×–2.4×) and slower than C++ on all of them. With `--backend llvm` the run times are within about ±10% of Rust on six programs (differences that small on ~0.1 s runs are noise, not a win), 1.31× on `nbody` and 1.06× on `matmul`, and 1.0–2.1× of C++ (`fib`, `matmul` and `alloc` are the slow cases). Flash is **not** shown to be faster than Rust or C++: Flash checks list indexes and the benchmarks are small, single-machine measurements. Cranelift trades optimisation for compile speed (Flash builds take 0.05–0.13 s).
 
 ## Documentation
 
