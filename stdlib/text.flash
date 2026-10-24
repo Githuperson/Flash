@@ -1,0 +1,45 @@
+# std.text — string helpers written in Flash.
+#   import std.text
+#   say(text.repeat("ab", 3))
+
+fn repeat(s: String, n: Int) -> String:
+    result = ""
+    for i in 0..n:
+        result = result + s
+    return result
+
+fn pad_left(s: String, width: Int, fill: String) -> String:
+    result = copy(s)
+    while len(result) < width:
+        result = fill + result
+    return result
+
+fn pad_right(s: String, width: Int, fill: String) -> String:
+    result = copy(s)
+    while len(result) < width:
+        result = result + fill
+    return result
+
+fn is_blank(s: String) -> Bool:
+    return len(trim(s)) == 0
+
+fn count(s: String, sub: String) -> Int:
+    if len(sub) == 0:
+        return 0
+    n = 0
+    pos = 0
+    while pos <= len(s) - len(sub):
+        if substr(s, pos, len(sub)) == sub:
+            n += 1
+            pos += len(sub)
+        else:
+            pos += 1
+    return n
+
+fn reverse(s: String) -> String:
+    result = ""
+    i = len(s) - 1
+    while i >= 0:
+        result = result + substr(s, i, 1)
+        i -= 1
+    return result

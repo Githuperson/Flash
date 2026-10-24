@@ -1,0 +1,72 @@
+# std.math — small numeric helpers written in Flash.
+#   import std.math
+#   say(math.gcd(12, 18))
+
+fn gcd(a: Int, b: Int) -> Int:
+    x = abs(a)
+    y = abs(b)
+    while y != 0:
+        t = x % y
+        x = y
+        y = t
+    return x
+
+fn lcm(a: Int, b: Int) -> Int:
+    if a == 0 or b == 0:
+        return 0
+    return abs(a / gcd(a, b) * b)
+
+fn clamp(x, lo, hi):
+    if x < lo:
+        return lo
+    if x > hi:
+        return hi
+    return x
+
+fn factorial(n: Int) -> Int:
+    result = 1
+    for i in 2..=n:
+        result *= i
+    return result
+
+fn pow_int(base: Int, exp: Int) -> Int:
+    result = 1
+    for i in 0..exp:
+        result *= base
+    return result
+
+fn is_prime(n: Int) -> Bool:
+    if n < 2:
+        return False
+    i = 2
+    while i * i <= n:
+        if n % i == 0:
+            return False
+        i += 1
+    return True
+
+fn sum(xs: List[Int]) -> Int:
+    total = 0
+    for x in xs:
+        total += x
+    return total
+
+fn sum_float(xs: List[Float]) -> Float:
+    total = 0.0
+    for x in xs:
+        total += x
+    return total
+
+fn max_of(xs: List[Int]) -> Int:
+    best = xs[0]
+    for x in xs:
+        if x > best:
+            best = x
+    return best
+
+fn min_of(xs: List[Int]) -> Int:
+    best = xs[0]
+    for x in xs:
+        if x < best:
+            best = x
+    return best

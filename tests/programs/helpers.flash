@@ -1,0 +1,12 @@
+struct Point:
+    x: Int
+    y: Int
+
+fn make_point(x: Int, y: Int) -> Point:
+    return Point(x=x, y=y)
+
+fn manhattan(p: Point) -> Int:
+    return abs(p.x) + abs(p.y)
+
+fn twice(x):
+    return x + x

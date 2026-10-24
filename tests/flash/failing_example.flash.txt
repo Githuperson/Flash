@@ -1,0 +1,3 @@
+# Kept as .txt so `flash test` does not run it: rename to .flash to see a failing test report.
+fn test_this_one_fails():
+    assert(1 + 1 == 3, "arithmetic is broken")

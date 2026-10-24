@@ -31,6 +31,8 @@ pub struct FnCtx {
     pub is_main: bool,
     pub module: usize,
     pub inst: FuncId,
+    /// For instances of functions with inferred parameter types: where it was called from.
+    pub call_site: Option<(Span, String)>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -89,11 +91,22 @@ impl<'a> Checker<'a> {
         display(t, &self.structs)
     }
 
+    fn annotate(&self, mut d: Diagnostic) -> Diagnostic {
+        if let Some(cx) = self.stack.last() {
+            if let Some((sp, what)) = &cx.call_site {
+                d = d.note(*sp, what.clone());
+            }
+        }
+        d
+    }
+
     pub fn error(&mut self, d: Diagnostic) {
+        let d = self.annotate(d);
         self.diags.push(d);
     }
 
     pub fn fail<T>(&mut self, d: Diagnostic) -> R<T> {
+        let d = self.annotate(d);
         self.diags.push(d);
         Err(())
     }
@@ -153,6 +166,7 @@ impl<'a> Checker<'a> {
             is_main: true,
             module: 0,
             inst: main_id,
+            call_site: None,
         });
         let mut body = vec![];
         let root = &self.mods[0].ast;
@@ -268,6 +282,12 @@ impl<'a> Checker<'a> {
             is_main: false,
             module,
             inst: id,
+            call_site: if def.params.iter().any(|p| p.ty.is_none()) {
+                let tys: Vec<String> = arg_tys.iter().map(|t| self.tn(t)).collect();
+                Some((call_span, format!("while checking '{}' with argument types ({}), called here", def.name, tys.join(", "))))
+            } else {
+                None
+            },
         });
         let mut params = vec![];
         for (p, ty) in def.params.iter().zip(arg_tys.iter()) {
@@ -304,7 +324,6 @@ impl<'a> Checker<'a> {
                     .help(format!("Every path through the function must `return` a {} (add a `return` at the end or in the `else` branch).", self.tn(&ret))),
             );
         }
-        let _ = call_span;
         self.funcs[id] = Some(HFunc {
             name: def.name.clone(),
             params,

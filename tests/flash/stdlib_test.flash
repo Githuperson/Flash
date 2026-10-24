@@ -1,0 +1,29 @@
+import std.math
+import std.text
+
+fn test_gcd_and_lcm():
+    assert(math.gcd(84, 36) == 12, "gcd(84, 36) should be 12")
+    assert(math.gcd(-4, 6) == 2)
+    assert(math.lcm(4, 6) == 12)
+
+fn test_primes():
+    assert(math.is_prime(2))
+    assert(math.is_prime(97))
+    assert(not math.is_prime(1))
+    assert(not math.is_prime(91))
+
+fn test_sum_and_extremes():
+    xs = [5, 3, 9, 1]
+    assert(math.sum(xs) == 18, "sum")
+    assert(math.max_of(xs) == 9)
+    assert(math.min_of(xs) == 1)
+
+fn test_clamp_is_generic():
+    assert(math.clamp(5, 0, 3) == 3)
+    assert(math.clamp(-1.5, 0.0, 1.0) == 0.0)
+
+fn test_text():
+    assert(text.repeat("ab", 3) == "ababab")
+    assert(text.pad_left("5", 3, "0") == "005")
+    assert(text.reverse("flash") == "hsalf")
+    assert(text.count("banana", "an") == 2)

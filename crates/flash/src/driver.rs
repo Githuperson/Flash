@@ -116,6 +116,19 @@ impl Loader {
                         file_path.push(seg);
                     }
                     file_path.set_extension("flash");
+                    if !file_path.exists() && imp.path[0] != "std" {
+                        // Packages installed by flashpkg are made visible through FLASH_PATH.
+                        if let Some(paths) = std::env::var_os("FLASH_PATH") {
+                            let mut rel_path = PathBuf::new();
+                            for seg in rel {
+                                rel_path.push(seg);
+                            }
+                            rel_path.set_extension("flash");
+                            if let Some(found) = std::env::split_paths(&paths).map(|d| d.join(&rel_path)).find(|p| p.exists()) {
+                                file_path = found;
+                            }
+                        }
+                    }
                     if !file_path.exists() {
                         self.diags.push(
                             Diagnostic::error(imp.span, format!("Cannot find the module '{}'.", imp.path.join(".")))
@@ -312,7 +325,21 @@ pub fn build(src: &Path, opts: &BuildOptions) -> Result<(PathBuf, BuildTimings),
         println!("{}", module);
     }
     let t1 = std::time::Instant::now();
-    let obj_bytes = crate::codegen::compile(&module, &crate::codegen::CodegenOptions { release: opts.release, target: opts.target.clone() })?;
+    let cg_opts = crate::codegen::CodegenOptions { release: opts.release, target: opts.target.clone() };
+    // The code generator panics on unsupported targets; report that as an ordinary error.
+    let prev_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+    let compiled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| crate::codegen::compile(&module, &cg_opts)));
+    std::panic::set_hook(prev_hook);
+    let obj_bytes = match compiled {
+        Ok(r) => r?,
+        Err(_) => {
+            return Err(format!(
+                "the code generator failed for target '{}' (this target is probably not supported by the Cranelift backend yet)\n",
+                opts.target.as_deref().unwrap_or("host")
+            ))
+        }
+    };
     let t2 = std::time::Instant::now();
     let out = default_output(src, opts);
     let obj_path = if opts.emit_obj_only { out.clone() } else { out.with_extension("flash.o") };
@@ -330,4 +357,104 @@ pub fn build(src: &Path, opts: &BuildOptions) -> Result<(PathBuf, BuildTimings),
 /// Type-check only.
 pub fn check(src: &Path) -> Result<(), String> {
     frontend(src, None).map(|_| ())
+}
+
+// ------------------------------------------------------------------ flash test
+
+/// Names of the `fn test_*()` functions in a source file.
+pub fn find_tests(path: &Path) -> Vec<String> {
+    let Ok(text) = std::fs::read_to_string(path) else { return vec![] };
+    let mut diags = Diagnostics::default();
+    let m = crate::parser::parse_module(&text, 0, &mut diags);
+    m.items
+        .iter()
+        .filter_map(|it| match it {
+            Item::Fn(f) if f.name.starts_with("test_") && f.params.is_empty() => Some(f.name.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+fn collect_flash_files(dir: &Path, out: &mut Vec<PathBuf>) {
+    let Ok(rd) = std::fs::read_dir(dir) else { return };
+    let mut entries: Vec<_> = rd.flatten().map(|e| e.path()).collect();
+    entries.sort();
+    for p in entries {
+        if p.is_dir() {
+            let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            if !name.starts_with('.') && name != "target" && name != "build" {
+                collect_flash_files(&p, out);
+            }
+        } else if p.extension().map_or(false, |e| e == "flash") {
+            out.push(p);
+        }
+    }
+}
+
+pub struct TestSummary {
+    pub passed: usize,
+    pub failed: usize,
+    pub compile_errors: usize,
+}
+
+/// Compile each test file once and run every `test_*` function in its own process.
+pub fn run_tests(target: &Path, release: bool) -> TestSummary {
+    let mut files = vec![];
+    if target.is_dir() {
+        collect_flash_files(target, &mut files);
+    } else {
+        files.push(target.to_path_buf());
+    }
+    let mut summary = TestSummary { passed: 0, failed: 0, compile_errors: 0 };
+    let tmp = std::env::temp_dir().join(format!("flash-test-{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&tmp);
+    for file in files {
+        let tests = find_tests(&file);
+        if tests.is_empty() {
+            continue;
+        }
+        // Dispatch on the first command-line argument: `exe test_name` runs only that test.
+        let mut suffix = String::from("__flash_selected = args()\nif len(__flash_selected) > 0:\n");
+        for (i, t) in tests.iter().enumerate() {
+            suffix.push_str(&format!("    {} __flash_selected[0] == \"{}\":\n        {}()\n", if i == 0 { "if" } else { "elif" }, t, t));
+        }
+        let exe = tmp.join(format!("{}{}", file.file_stem().unwrap().to_string_lossy(), exe_suffix(None)));
+        let opts = BuildOptions { release, output: Some(exe.clone()), source_suffix: Some(suffix), ..Default::default() };
+        match build(&file, &opts) {
+            Err(e) => {
+                eprint!("{}", e);
+                println!("{}: FAILED TO COMPILE", file.display());
+                summary.compile_errors += 1;
+            }
+            Ok(_) => {
+                for t in tests {
+                    let out = Command::new(&exe).arg(&t).output();
+                    match out {
+                        Ok(o) if o.status.success() => {
+                            println!("test {}::{} ... ok", file.display(), t);
+                            summary.passed += 1;
+                        }
+                        Ok(o) => {
+                            println!("test {}::{} ... FAILED", file.display(), t);
+                            let so = String::from_utf8_lossy(&o.stdout);
+                            let se = String::from_utf8_lossy(&o.stderr);
+                            if !so.trim().is_empty() {
+                                println!("---- stdout ----\n{}", so.trim_end());
+                            }
+                            if !se.trim().is_empty() {
+                                println!("---- stderr ----\n{}", se.trim_end());
+                            }
+                            summary.failed += 1;
+                        }
+                        Err(e) => {
+                            println!("test {}::{} ... FAILED ({})", file.display(), t, e);
+                            summary.failed += 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let _ = std::fs::remove_dir_all(&tmp);
+    summary
 }

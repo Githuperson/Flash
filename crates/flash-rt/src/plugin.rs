@@ -13,7 +13,6 @@ use flash_plugin_sdk::{tag, FlashFn, FlashPluginInfo, FlashValue, FreeBufFn, ABI
 use sha2::{Digest, Sha256};
 
 struct Func {
-    name: String,
     ptr: FlashFn,
     ret_tag: u32,
     nparams: u32,
@@ -23,7 +22,6 @@ struct Loaded {
     _lib: libloading::Library,
     funcs: Vec<Func>,
     free_buf: FreeBufFn,
-    name: String,
 }
 
 static PLUGINS: Mutex<Vec<Loaded>> = Mutex::new(Vec::new());
@@ -173,7 +171,7 @@ pub fn load(desc: &str) {
                 name, fname, actual, fi.ret_tag, ptags, rtag
             ));
         }
-        resolved.push(Func { name: fname.clone(), ptr: fi.func, ret_tag: *rtag, nparams: fi.nparams });
+        resolved.push(Func { ptr: fi.func, ret_tag: *rtag, nparams: fi.nparams });
     }
     if std::env::var_os("FLASH_PLUGIN_QUIET").is_none() {
         eprintln!(
@@ -184,7 +182,7 @@ pub fn load(desc: &str) {
             &digest[..16.min(digest.len())]
         );
     }
-    PLUGINS.lock().unwrap().push(Loaded { _lib: library, funcs: resolved, free_buf: info.free_buf, name });
+    PLUGINS.lock().unwrap().push(Loaded { _lib: library, funcs: resolved, free_buf: info.free_buf });
 }
 
 /// Convert a plugin-allocated string into a Flash String and release the plugin's buffer.
