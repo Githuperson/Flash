@@ -30,6 +30,15 @@ fn ext(t: Ty) -> &'static str {
     }
 }
 
+/// `, !tbaa !N` suffix for an access with alias class `tag` (access tag nodes are `!2t`).
+fn tbaa(tag: MemTag) -> String {
+    if tag == NO_TAG {
+        String::new()
+    } else {
+        format!(", !tbaa !{}", 2 * tag as u32)
+    }
+}
+
 fn float_lit(v: f64) -> String {
     format!("0x{:016X}", v.to_bits())
 }
@@ -263,20 +272,20 @@ impl<'a> Emitter<'a> {
                 }
                 self.store_v(f, *dst, &r);
             }
-            Inst::Load { dst, base, off } => {
+            Inst::Load { dst, base, off, tag } => {
                 let ty = f.vregs[*dst as usize];
                 let b = self.load_v(f, *base);
                 let p = self.addr(b, *off);
                 let r = self.t();
-                let _ = writeln!(self.out, "  {} = load {}, ptr {}, align {}", r, lty(ty), p, ty.bytes());
+                let _ = writeln!(self.out, "  {} = load {}, ptr {}, align {}{}", r, lty(ty), p, ty.bytes(), tbaa(*tag));
                 self.store_v(f, *dst, &r);
             }
-            Inst::Store { base, off, val } => {
+            Inst::Store { base, off, val, tag } => {
                 let ty = f.vregs[*val as usize];
                 let b = self.load_v(f, *base);
                 let v = self.load_v(f, *val);
                 let p = self.addr(b, *off);
-                let _ = writeln!(self.out, "  store {} {}, ptr {}, align {}", lty(ty), v, p, ty.bytes());
+                let _ = writeln!(self.out, "  store {} {}, ptr {}, align {}{}", lty(ty), v, p, ty.bytes(), tbaa(*tag));
             }
             Inst::Call { dst, callee, args } => {
                 let (name, params, ret): (String, Vec<Ty>, Option<Ty>) = match callee {
@@ -353,6 +362,15 @@ pub fn emit_ir(m: &Module) -> String {
     let _ = writeln!(e.out, "declare i64 @llvm.fptosi.sat.i64.f64(double)\ndeclare i32 @llvm.fptosi.sat.i32.f64(double)\ndeclare i64 @llvm.fptoui.sat.i64.f64(double)\n");
     for f in &m.funcs {
         e.function(f);
+    }
+    // Type-based alias analysis: accesses with different (unrelated) classes never alias, e.g. a
+    // store to a Float list element cannot change a list's length or data pointer, so LLVM may
+    // keep those in registers across the store.
+    let _ = writeln!(e.out, "!0 = !{{!\"flash tbaa root\"}}");
+    for (i, name) in m.tags.iter().enumerate().skip(1) {
+        let t = i as u32;
+        let _ = writeln!(e.out, "!{} = !{{!\"{}\", !0, i64 0}}", 2 * t - 1, name);
+        let _ = writeln!(e.out, "!{} = !{{!{}, !{}, i64 0}}", 2 * t, 2 * t - 1, 2 * t - 1);
     }
     e.out
 }

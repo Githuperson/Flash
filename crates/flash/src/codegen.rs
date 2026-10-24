@@ -7,7 +7,8 @@ use std::collections::HashMap;
 
 use cranelift_codegen::ir::condcodes::{FloatCC, IntCC};
 use cranelift_codegen::ir::{
-    self, types, AbiParam, InstBuilder, MemFlagsData, StackSlotData, StackSlotKind, TrapCode, UserFuncName,
+    self, types, AbiParam, AliasRegion, AliasRegionData, InstBuilder, MemFlagsData, StackSlotData, StackSlotKind, TrapCode,
+    UserFuncName,
 };
 use cranelift_codegen::isa::OwnedTargetIsa;
 use cranelift_codegen::settings::{self, Configurable};
@@ -136,6 +137,7 @@ pub fn compile(m: &fir::Module, opts: &CodegenOptions) -> Result<Vec<u8>, String
                 .collect();
             // Local FuncRefs.
             let mut fref_cache: HashMap<FuncId, ir::FuncRef> = HashMap::new();
+            let mut regions: HashMap<u16, AliasRegion> = HashMap::new();
             let entry = blocks[0];
             b.append_block_params_for_function_params(entry);
             b.switch_to_block(entry);
@@ -148,7 +150,7 @@ pub fn compile(m: &fir::Module, opts: &CodegenOptions) -> Result<Vec<u8>, String
                     b.switch_to_block(blocks[bi]);
                 }
                 for inst in &blk.insts {
-                    emit_inst(&mut b, &mut module, inst, &vars, &slots, &ext_ids, &func_ids, &data_ids, &mut fref_cache, f);
+                    emit_inst(&mut b, &mut module, inst, &vars, &slots, &ext_ids, &func_ids, &data_ids, &mut fref_cache, &mut regions, &m.tags, f);
                 }
                 match &blk.term {
                     Term::Jump(t) => {
@@ -193,6 +195,8 @@ fn emit_inst(
     func_ids: &[FuncId],
     data_ids: &[cranelift_module::DataId],
     frefs: &mut HashMap<FuncId, ir::FuncRef>,
+    regions: &mut HashMap<u16, AliasRegion>,
+    tags: &[String],
     f: &fir::Function,
 ) {
     macro_rules! u {
@@ -206,7 +210,18 @@ fn emit_inst(
             b.def_var(vars[*$dst as usize], v);
         }};
     }
-    let mf = MemFlagsData::trusted();
+    // Memory accesses carry an alias region derived from their IR tag, so Cranelift's alias
+    // analysis can keep list headers in registers across stores to elements and fields.
+    let mut mem = |b: &mut FunctionBuilder, tag: u16| {
+        let base = MemFlagsData::trusted();
+        if tag == 0 {
+            return base;
+        }
+        let region = *regions.entry(tag).or_insert_with(|| {
+            b.func.dfg.alias_regions.insert(AliasRegionData { user_id: tag as u32, description: tags[tag as usize].clone().into() })
+        });
+        base.with_alias_region(Some(region))
+    };
     match inst {
         Inst::IConst { dst, val } => {
             let t = f.vregs[*dst as usize];
@@ -292,19 +307,20 @@ fn emit_inst(
                 CastOp::UToF => b.ins().fcvt_from_uint(to, x),
                 CastOp::FToS => b.ins().fcvt_to_sint_sat(to, x),
                 CastOp::FToU => b.ins().fcvt_to_uint_sat(to, x),
-                CastOp::FBitsToI => b.ins().bitcast(to, MemFlagsData::new(), x),
-                CastOp::IBitsToF => b.ins().bitcast(to, MemFlagsData::new(), x),
+                CastOp::FBitsToI | CastOp::IBitsToF => b.ins().bitcast(to, MemFlagsData::new(), x),
             };
             d!(dst, r);
         }
-        Inst::Load { dst, base, off } => {
+        Inst::Load { dst, base, off, tag } => {
             let ty = clif_ty(f.vregs[*dst as usize]);
             let p = u!(base);
+            let mf = mem(b, *tag);
             d!(dst, b.ins().load(ty, mf, p, *off));
         }
-        Inst::Store { base, off, val } => {
+        Inst::Store { base, off, val, tag } => {
             let p = u!(base);
             let v = u!(val);
+            let mf = mem(b, *tag);
             b.ins().store(mf, v, p, *off);
         }
         Inst::Call { dst, callee, args } => {

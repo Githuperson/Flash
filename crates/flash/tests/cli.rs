@@ -69,7 +69,7 @@ fn build_produces_a_standalone_native_executable() {
 }
 
 #[test]
-fn release_and_dev_builds_agree_but_release_is_not_slower_to_run() {
+fn dev_and_release_builds_produce_the_same_output() {
     let root = repo_root();
     let src = root.join("tests/programs/generics.flash");
     let (_, dev) = build_and_run(&src, false, "cli-dev", &[]);
@@ -188,4 +188,39 @@ fn cross_compilation_emits_objects_for_other_platforms() {
     }
     let bad = flash(&["build", src.to_str().unwrap(), "--target", "not-a-target", "-o", dir.join("x.o").to_str().unwrap()]);
     assert_eq!(bad.status.code(), Some(1));
+}
+
+#[test]
+fn build_cache_reuses_executables_and_invalidates_on_change() {
+    let dir = scratch_dir("cli-cache");
+    let cache = dir.join("cache");
+    let src = dir.join("cached.flash");
+    std::fs::write(&src, "say(\"first\")\n").unwrap();
+    let exe = dir.join("cached_exe");
+    let build = |extra: &[&str]| {
+        let mut args = vec!["build", src.to_str().unwrap(), "-o", exe.to_str().unwrap()];
+        args.extend_from_slice(extra);
+        Command::new(flash_bin()).args(&args).env("FLASH_CACHE_DIR", &cache).output().unwrap()
+    };
+    let first = build(&[]);
+    assert!(text(&first.stdout).contains("front end"), "{}", text(&first.stdout));
+    let second = build(&[]);
+    assert!(text(&second.stdout).contains("reused from the build cache"), "{}", text(&second.stdout));
+    assert_eq!(text(&Command::new(&exe).output().unwrap().stdout), "first\n");
+    // --no-cache, a different mode, and a changed source all miss
+    assert!(text(&build(&["--no-cache"]).stdout).contains("front end"));
+    assert!(text(&build(&["--release"]).stdout).contains("front end"));
+    std::fs::write(&src, "say(\"second\")\n").unwrap();
+    let third = build(&[]);
+    assert!(text(&third.stdout).contains("front end"), "{}", text(&third.stdout));
+    assert_eq!(text(&Command::new(&exe).output().unwrap().stdout), "second\n");
+    // an edit to an imported module also invalidates
+    let helper = dir.join("helper.flash");
+    std::fs::write(&helper, "fn f():\n    return 1\n").unwrap();
+    std::fs::write(&src, "import helper\nsay(helper.f())\n").unwrap();
+    assert!(text(&build(&[]).stdout).contains("front end"));
+    assert!(text(&build(&[]).stdout).contains("reused"));
+    std::fs::write(&helper, "fn f():\n    return 2\n").unwrap();
+    assert!(text(&build(&[]).stdout).contains("front end"));
+    assert_eq!(text(&Command::new(&exe).output().unwrap().stdout), "2\n");
 }

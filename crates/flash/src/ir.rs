@@ -33,6 +33,10 @@ pub type BlockId = u32;
 pub type FuncRef = u32;
 pub type ExternRef = u32;
 pub type DataId = u32;
+/// Alias-analysis class of a memory access (0 = unknown: may alias anything). Back ends that
+/// understand type-based alias analysis (the LLVM back end) use it; others ignore it.
+pub type MemTag = u16;
+pub const NO_TAG: MemTag = 0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BinOp {
@@ -119,8 +123,8 @@ pub enum Inst {
     Cmp { dst: VReg, op: CmpOp, a: VReg, b: VReg },
     Un { dst: VReg, op: UnOp, a: VReg },
     Cast { dst: VReg, op: CastOp, src: VReg },
-    Load { dst: VReg, base: VReg, off: i32 },
-    Store { base: VReg, off: i32, val: VReg },
+    Load { dst: VReg, base: VReg, off: i32, tag: MemTag },
+    Store { base: VReg, off: i32, val: VReg, tag: MemTag },
     Call { dst: Option<VReg>, callee: Callee, args: Vec<VReg> },
     /// Address of read-only/static data.
     DataAddr { dst: VReg, data: DataId },
@@ -178,6 +182,8 @@ pub struct Module {
     pub funcs: Vec<Function>,
     pub externs: Vec<ExternDecl>,
     pub data: Vec<DataItem>,
+    /// Names of memory alias classes; `tags[0]` is unused (`NO_TAG`).
+    pub tags: Vec<String>,
 }
 
 impl Module {

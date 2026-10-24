@@ -3,4 +3,5 @@ target/
 *.obj
 /build/
 /.flash-cache/
-bench/out/
+benchmarks/out/
+benchmarks/results_raw.*

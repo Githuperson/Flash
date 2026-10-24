@@ -16,8 +16,20 @@ pub fn scratch_dir(tag: &str) -> PathBuf {
     d
 }
 
+/// Build cache used by the tests, kept out of the user's real cache.
+pub fn test_cache_dir() -> PathBuf {
+    let d = std::env::temp_dir().join(format!("flash-test-cache-{}", std::process::id()));
+    std::fs::create_dir_all(&d).unwrap();
+    d
+}
+
 pub fn flash(args: &[&str]) -> Output {
-    Command::new(flash_bin()).args(args).env("FLASH_PLUGIN_QUIET", "1").output().expect("failed to run flash")
+    Command::new(flash_bin())
+        .args(args)
+        .env("FLASH_PLUGIN_QUIET", "1")
+        .env("FLASH_CACHE_DIR", test_cache_dir())
+        .output()
+        .expect("failed to run flash")
 }
 
 /// Build a program and run it; returns (build output, run output).

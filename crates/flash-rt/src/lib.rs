@@ -133,13 +133,39 @@ fn fmt_float(v: f64) -> String {
     format!("{:?}", v)
 }
 
+/// Decimal digits of `v` written at the end of `buf`; returns the start index.
+fn itoa(mut v: u64, neg: bool, buf: &mut [u8; 24]) -> usize {
+    let mut i = buf.len();
+    loop {
+        i -= 1;
+        buf[i] = b'0' + (v % 10) as u8;
+        v /= 10;
+        if v == 0 {
+            break;
+        }
+    }
+    if neg {
+        i -= 1;
+        buf[i] = b'-';
+    }
+    i
+}
+
+fn int_text(v: i64, buf: &mut [u8; 24]) -> &[u8] {
+    let i = itoa(v.unsigned_abs(), v < 0, buf);
+    &buf[i..]
+}
+
 #[no_mangle]
 pub extern "C" fn fl_str_from_int(v: i64) -> *mut u8 {
-    new_str(v.to_string().as_bytes())
+    let mut buf = [0u8; 24];
+    new_str(int_text(v, &mut buf))
 }
 #[no_mangle]
 pub extern "C" fn fl_str_from_uint(v: i64) -> *mut u8 {
-    new_str((v as u64).to_string().as_bytes())
+    let mut buf = [0u8; 24];
+    let i = itoa(v as u64, false, &mut buf);
+    new_str(&buf[i..])
 }
 #[no_mangle]
 pub extern "C" fn fl_str_from_float(v: f64) -> *mut u8 {
@@ -157,11 +183,14 @@ pub extern "C" fn fl_str_from_none() -> *mut u8 {
 // ------------------------------------------------------------------- print
 #[no_mangle]
 pub extern "C" fn fl_print_int(v: i64) {
-    out_write(v.to_string().as_bytes());
+    let mut buf = [0u8; 24];
+    out_write(int_text(v, &mut buf));
 }
 #[no_mangle]
 pub extern "C" fn fl_print_uint(v: i64) {
-    out_write((v as u64).to_string().as_bytes());
+    let mut buf = [0u8; 24];
+    let i = itoa(v as u64, false, &mut buf);
+    out_write(&buf[i..]);
 }
 #[no_mangle]
 pub extern "C" fn fl_print_float(v: f64) {

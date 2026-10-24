@@ -21,6 +21,8 @@ pub struct BuildOptions {
     pub backend: crate::codegen::Backend,
     /// Extra Flash source appended to the root module (used by `flash test`).
     pub source_suffix: Option<String>,
+    /// Reuse a previously linked executable when nothing relevant changed (see `cache_key`).
+    pub no_cache: bool,
 }
 
 pub struct Frontend {
@@ -337,12 +339,85 @@ pub struct BuildTimings {
     pub frontend: std::time::Duration,
     pub backend: std::time::Duration,
     pub link: std::time::Duration,
+    /// The executable came from the build cache.
+    pub cached: bool,
+}
+
+/// Directory of the build cache: `$FLASH_CACHE_DIR`, else `$XDG_CACHE_HOME/flash`, else `~/.cache/flash`.
+pub fn cache_dir() -> Option<PathBuf> {
+    if let Some(d) = std::env::var_os("FLASH_CACHE_DIR") {
+        return Some(PathBuf::from(d));
+    }
+    if let Some(d) = std::env::var_os("XDG_CACHE_HOME") {
+        return Some(PathBuf::from(d).join("flash"));
+    }
+    std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache").join("flash"))
+}
+
+/// Keep only the `keep` most recently written cache entries.
+fn prune_cache(dir: &Path, keep: usize) {
+    let Ok(rd) = std::fs::read_dir(dir) else { return };
+    let mut entries: Vec<(std::time::SystemTime, PathBuf)> =
+        rd.flatten().filter_map(|e| Some((e.metadata().ok()?.modified().ok()?, e.path()))).collect();
+    if entries.len() <= keep {
+        return;
+    }
+    entries.sort();
+    for (_, p) in entries.iter().take(entries.len() - keep) {
+        let _ = std::fs::remove_file(p);
+    }
+}
+
+fn file_stamp(p: &Path) -> String {
+    match std::fs::metadata(p) {
+        Ok(m) => {
+            let t = m.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_nanos()).unwrap_or(0);
+            format!("{}:{}", m.len(), t)
+        }
+        Err(_) => "missing".into(),
+    }
+}
+
+/// Hash of everything that influences the produced executable: all source texts, the options, the
+/// plugin signatures, and the identity of the compiler and runtime library.
+fn cache_key(fe: &Frontend, opts: &BuildOptions) -> String {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    h.update(crate::VERSION.as_bytes());
+    h.update(file_stamp(&std::env::current_exe().unwrap_or_default()).as_bytes());
+    if let Ok(rt) = find_runtime(opts.release) {
+        h.update(rt.to_string_lossy().as_bytes());
+        h.update(file_stamp(&rt).as_bytes());
+    }
+    h.update(format!("{}|{:?}|{:?}|{:?}", opts.release, opts.target, opts.backend, std::env::var("FLASH_CC").ok()).as_bytes());
+    for f in &fe.sources.files {
+        h.update(f.display.as_bytes());
+        h.update((f.text.len() as u64).to_le_bytes());
+        h.update(f.text.as_bytes());
+    }
+    for p in &fe.program.plugins {
+        h.update(crate::plugins::descriptor(p).as_bytes());
+    }
+    h.finalize().iter().map(|b| format!("{:02x}", b)).collect()
 }
 
 /// Compile `src` into a native executable at the returned path.
 pub fn build(src: &Path, opts: &BuildOptions) -> Result<(PathBuf, BuildTimings), String> {
     let t0 = std::time::Instant::now();
     let fe = frontend(src, opts.source_suffix.as_deref())?;
+    // Build cache: a hit skips lowering, code generation and linking.
+    let cache_entry = if opts.no_cache || opts.emit_ir || opts.emit_obj_only {
+        None
+    } else {
+        cache_dir().map(|d| d.join(cache_key(&fe, opts)))
+    };
+    let out = default_output(src, opts);
+    if let Some(entry) = &cache_entry {
+        if entry.is_file() && std::fs::copy(entry, &out).is_ok() {
+            let t = t0.elapsed();
+            return Ok((out, BuildTimings { frontend: t, backend: Default::default(), link: Default::default(), cached: true }));
+        }
+    }
     let module = lower_and_optimise(&fe.program, opts.release);
     if opts.emit_ir {
         println!("{}", module);
@@ -364,17 +439,29 @@ pub fn build(src: &Path, opts: &BuildOptions) -> Result<(PathBuf, BuildTimings),
         }
     };
     let t2 = std::time::Instant::now();
-    let out = default_output(src, opts);
     let obj_path = if opts.emit_obj_only { out.clone() } else { out.with_extension("flash.o") };
     std::fs::write(&obj_path, &obj_bytes).map_err(|e| format!("cannot write {}: {}", obj_path.display(), e))?;
     if opts.emit_obj_only {
-        return Ok((obj_path, BuildTimings { frontend: t1 - t0, backend: t2 - t1, link: Default::default() }));
+        return Ok((obj_path, BuildTimings { frontend: t1 - t0, backend: t2 - t1, link: Default::default(), cached: false }));
     }
     let r = link(&obj_path, &out, opts);
     let _ = std::fs::remove_file(&obj_path);
     r?;
     let t3 = std::time::Instant::now();
-    Ok((out, BuildTimings { frontend: t1 - t0, backend: t2 - t1, link: t3 - t2 }))
+    if let Some(entry) = &cache_entry {
+        // Best effort: a failure to cache never fails the build.
+        if let Some(parent) = entry.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let tmp = entry.with_extension(format!("tmp{}", std::process::id()));
+        if std::fs::copy(&out, &tmp).is_ok() && std::fs::rename(&tmp, entry).is_err() {
+            let _ = std::fs::remove_file(&tmp);
+        }
+        if let Some(dir) = entry.parent() {
+            prune_cache(dir, 64);
+        }
+    }
+    Ok((out, BuildTimings { frontend: t1 - t0, backend: t2 - t1, link: t3 - t2, cached: false }))
 }
 
 /// Type-check only.

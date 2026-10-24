@@ -16,6 +16,7 @@ fn flashpkg(dir: &Path, args: &[&str]) -> Output {
         .current_dir(dir)
         .args(args)
         .env("FLASH_PLUGIN_QUIET", "1")
+        .env("FLASH_CACHE_DIR", test_cache_dir())
         .output()
         .expect("flashpkg binary not built; run `cargo build --workspace`")
 }

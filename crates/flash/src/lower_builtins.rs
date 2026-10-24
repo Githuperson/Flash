@@ -139,7 +139,8 @@ impl<'a, 'p> FnLower<'a, 'p> {
             }
             B::Len => {
                 let v = self.borrow(&args[0]);
-                self.load(Ty::I64, v, 0)
+                let tl = self.tag_len();
+                self.load_t(Ty::I64, v, 0, tl)
             }
             B::Append => {
                 let Type::List(et) = &args[0].ty else { unreachable!() };
@@ -147,7 +148,8 @@ impl<'a, 'p> FnLower<'a, 'p> {
                 let v = self.expr(&args[1]);
                 let stride = self.iconst(Ty::I64, Self::stride(et));
                 let slot = self.rtv("fl_list_push_slot", &[l, stride]);
-                self.store(slot, 0, v);
+                let te = self.tag_elem(et);
+                self.store_t(slot, 0, v, te);
                 self.dummy()
             }
             B::Pop => {
@@ -155,7 +157,8 @@ impl<'a, 'p> FnLower<'a, 'p> {
                 let l = self.borrow(&args[0]);
                 let stride = self.iconst(Ty::I64, Self::stride(et));
                 let slot = self.rtv("fl_list_pop_slot", &[l, stride]);
-                self.load(ir_ty(&e.ty), slot, 0)
+                let te = self.tag_elem(&e.ty);
+                self.load_t(ir_ty(&e.ty), slot, 0, te)
             }
             B::Copy => {
                 let v = self.borrow(&args[0]);
@@ -223,7 +226,9 @@ impl<'a, 'p> FnLower<'a, 'p> {
                 self.emit(Inst::Select { dst: cnt, cond: neg, a: zero, b: n });
                 let stride = self.iconst(Ty::I64, Self::stride(et));
                 let l = self.rtv("fl_list_new", &[cnt, stride]);
-                let data = self.load(Ty::I64, l, 16);
+                let td = self.tag_data();
+                let data = self.load_t(Ty::I64, l, 16, td);
+                let te = self.tag_elem(et);
                 let i = self.iconst(Ty::I64, 0);
                 let head = self.new_block();
                 let body = self.new_block();
@@ -235,13 +240,14 @@ impl<'a, 'p> FnLower<'a, 'p> {
                 self.switch(body);
                 let off = self.bin(BinOp::Mul, i, stride);
                 let addr = self.bin(BinOp::Add, data, off);
-                self.store(addr, 0, v);
+                self.store_t(addr, 0, v, te);
                 let one = self.iconst(Ty::I64, 1);
                 let i2 = self.bin(BinOp::Add, i, one);
                 self.copy(i, i2);
                 self.jump_to(head);
                 self.switch(exit);
-                self.store(l, 0, cnt);
+                let tl = self.tag_len();
+                self.store_t(l, 0, cnt, tl);
                 l
             }
             B::Pow => {

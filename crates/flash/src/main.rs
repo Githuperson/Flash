@@ -19,6 +19,7 @@ OPTIONS:
     -o <path>        Output file for `build`
     --target <triple>  Cross-compile (object file only, e.g. aarch64-apple-darwin)
     --emit-ir        Print the intermediate representation
+    --no-cache       Do not reuse or store executables in the build cache (~/.cache/flash, or $FLASH_CACHE_DIR)
     --backend <b>    Code generator: `cranelift` (default) or `llvm` (needs clang)
     --emit-llvm      Print the LLVM IR instead of building
 ";
@@ -46,6 +47,7 @@ fn main() -> ExitCode {
         match rest[i].as_str() {
             "--release" => opts.release = true,
             "--emit-ir" => opts.emit_ir = true,
+            "--no-cache" => opts.no_cache = true,
             "--emit-llvm" => {
                 opts_emit_llvm = true;
             }
@@ -120,6 +122,10 @@ fn main() -> ExitCode {
         "build" => {
             let Some(f) = file else { return usage("build") };
             match driver::build(&f, &opts) {
+                Ok((out, t)) if t.cached => {
+                    println!("Built {} ({} mode; reused from the build cache in {:.0?})", out.display(), if opts.release { "release" } else { "dev" }, t.frontend);
+                    ExitCode::SUCCESS
+                }
                 Ok((out, t)) => {
                     println!(
                         "Built {} ({} mode; front end {:.0?}, code generation {:.0?}, link {:.0?})",

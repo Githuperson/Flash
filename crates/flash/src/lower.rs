@@ -42,10 +42,12 @@ pub struct Lowerer<'p> {
     pub m: Module,
     strs: HashMap<String, DataId>,
     glue: HashMap<(GlueKind, Type), FuncRef>,
+    tags: HashMap<String, MemTag>,
 }
 
 pub fn lower(prog: &Program) -> Module {
-    let mut lw = Lowerer { prog, m: Module::default(), strs: HashMap::new(), glue: HashMap::new() };
+    let mut lw = Lowerer { prog, m: Module::default(), strs: HashMap::new(), glue: HashMap::new(), tags: HashMap::new() };
+    lw.m.tags.push(String::new());
     // Reserve function slots so calls can refer to any function by index.
     for f in &prog.funcs {
         lw.m.funcs.push(Function {
@@ -85,6 +87,16 @@ impl<'p> Lowerer<'p> {
     pub fn raw_data(&mut self, name: &str, bytes: Vec<u8>) -> DataId {
         let id = self.m.data.len() as u32;
         self.m.data.push(DataItem { name: format!(".L{}{}", name, id), bytes, align: 8, writable: false });
+        id
+    }
+
+    pub fn tag(&mut self, name: &str) -> MemTag {
+        if let Some(t) = self.tags.get(name) {
+            return *t;
+        }
+        let id = self.m.tags.len() as MemTag;
+        self.m.tags.push(name.to_string());
+        self.tags.insert(name.to_string(), id);
         id
     }
 
@@ -314,12 +326,39 @@ impl<'a, 'p> FnLower<'a, 'p> {
         dst
     }
     fn load(&mut self, ty: Ty, base: VReg, off: i32) -> VReg {
-        let dst = self.vreg(ty);
-        self.emit(Inst::Load { dst, base, off });
-        dst
+        self.load_t(ty, base, off, NO_TAG)
     }
     fn store(&mut self, base: VReg, off: i32, val: VReg) {
-        self.emit(Inst::Store { base, off, val });
+        self.store_t(base, off, val, NO_TAG)
+    }
+    fn load_t(&mut self, ty: Ty, base: VReg, off: i32, tag: MemTag) -> VReg {
+        let dst = self.vreg(ty);
+        self.emit(Inst::Load { dst, base, off, tag });
+        dst
+    }
+    fn store_t(&mut self, base: VReg, off: i32, val: VReg, tag: MemTag) {
+        self.emit(Inst::Store { base, off, val, tag });
+    }
+    /// Alias class for list/string length (offset 0) and list data pointer (offset 16).
+    fn tag_len(&mut self) -> MemTag {
+        self.lw.tag("hdr.len")
+    }
+    fn tag_data(&mut self) -> MemTag {
+        self.lw.tag("list.data")
+    }
+    /// List elements are classed by machine type (a `Float` slot never aliases an `Int` slot).
+    fn tag_elem(&mut self, ty: &Type) -> MemTag {
+        let name = match ir_ty(ty) {
+            Ty::F64 => "elem.f64",
+            Ty::I64 => "elem.i64",
+            Ty::I32 => "elem.i32",
+            Ty::I16 => "elem.i16",
+            Ty::I8 => "elem.i8",
+        };
+        self.lw.tag(name)
+    }
+    fn tag_field(&mut self, sid: usize, idx: usize) -> MemTag {
+        self.lw.tag(&format!("field.{}.{}", sid, idx))
     }
     fn copy(&mut self, dst: VReg, src: VReg) {
         self.emit(Inst::Copy { dst, src });
@@ -819,7 +858,8 @@ impl<'a, 'p> FnLower<'a, 'p> {
         self.begin_temps();
         let lp = self.expr(list);
         self.end_temps();
-        let n = self.load(Ty::I64, lp, 0);
+        let tl = self.tag_len();
+        let n = self.load_t(Ty::I64, lp, 0, tl);
         let idx = self.iconst(Ty::I64, 0);
         let head = self.new_block();
         let bb = self.new_block();
@@ -830,11 +870,13 @@ impl<'a, 'p> FnLower<'a, 'p> {
         let c = self.cmp(CmpOp::SLt, idx, n);
         self.branch(c, bb, exit);
         self.switch(bb);
-        let data = self.load(Ty::I64, lp, 16);
+        let td = self.tag_data();
+        let data = self.load_t(Ty::I64, lp, 16, td);
         let stride = self.iconst(Ty::I64, Self::stride(&et));
         let off = self.bin(BinOp::Mul, idx, stride);
         let addr = self.bin(BinOp::Add, data, off);
-        let ev = self.load(ir_ty(&et), addr, 0);
+        let te = self.tag_elem(&et);
+        let ev = self.load_t(ir_ty(&et), addr, 0, te);
         let vr = self.local_regs[var];
         self.copy(vr, ev);
         self.loops.push(LoopCtx { break_bb: exit, continue_bb: latch, scope_depth: self.scopes.len() });
@@ -872,19 +914,21 @@ impl<'a, 'p> FnLower<'a, 'p> {
                 let si = &self.lw.structs()[*sid];
                 let off = si.offsets[*idx] as i32;
                 let fty = si.fields[*idx].1.clone();
+                let tf = self.tag_field(*sid, *idx);
                 if fty.is_owned() {
-                    let old = self.load(Ty::I64, b, off);
+                    let old = self.load_t(Ty::I64, b, off, tf);
                     self.emit_drop(&fty, old);
                 }
-                self.store(b, off, v);
+                self.store_t(b, off, v, tf);
             }
             HKind::Index(base, idx) => {
                 let addr = self.elem_addr(base, idx);
+                let te = self.tag_elem(&place.ty);
                 if place.ty.is_owned() {
-                    let old = self.load(Ty::I64, addr, 0);
+                    let old = self.load_t(Ty::I64, addr, 0, te);
                     self.emit_drop(&place.ty, old);
                 }
-                self.store(addr, 0, v);
+                self.store_t(addr, 0, v, te);
             }
             _ => unreachable!("not a place"),
         }
@@ -902,14 +946,16 @@ impl<'a, 'p> FnLower<'a, 'p> {
             _ => false,
         };
         if !proven {
-            let len = self.load(Ty::I64, b, 0);
+            let tl = self.tag_len();
+            let len = self.load_t(Ty::I64, b, 0, tl);
             let ok = self.cmp(CmpOp::ULt, i64v, len);
             let pb = self.panic_block("fl_panic_bounds", &[i64v, len]);
             let cont = self.new_block();
             self.branch(ok, cont, pb);
             self.switch(cont);
         }
-        let data = self.load(Ty::I64, b, 16);
+        let td = self.tag_data();
+        let data = self.load_t(Ty::I64, b, 16, td);
         let stride = self.iconst(Ty::I64, Self::stride(et));
         let off = self.bin(BinOp::Mul, i64v, stride);
         self.bin(BinOp::Add, data, off)
@@ -1005,11 +1051,13 @@ impl<'a, 'p> FnLower<'a, 'p> {
                 let b = self.borrow(base);
                 let Type::Struct(sid) = &base.ty else { unreachable!() };
                 let si = &self.lw.structs()[*sid];
-                self.load(ir_ty(&si.fields[*idx].1), b, si.offsets[*idx] as i32)
+                let tf = self.tag_field(*sid, *idx);
+                self.load_t(ir_ty(&si.fields[*idx].1), b, si.offsets[*idx] as i32, tf)
             }
             HKind::Index(base, idx) => {
                 let addr = self.elem_addr(base, idx);
-                self.load(ir_ty(&e.ty), addr, 0)
+                let te = self.tag_elem(&e.ty);
+                self.load_t(ir_ty(&e.ty), addr, 0, te)
             }
             HKind::Struct(fields) => {
                 let Type::Struct(sid) = &e.ty else { unreachable!() };
@@ -1018,7 +1066,8 @@ impl<'a, 'p> FnLower<'a, 'p> {
                 let sz = self.iconst(Ty::I64, si.size as i64);
                 let p = self.rtv("fl_alloc", &[sz]);
                 for (i, v) in vals.into_iter().enumerate() {
-                    self.store(p, si.offsets[i] as i32, v);
+                    let tf = self.tag_field(*sid, i);
+                    self.store_t(p, si.offsets[i] as i32, v, tf);
                 }
                 p
             }
@@ -1029,13 +1078,16 @@ impl<'a, 'p> FnLower<'a, 'p> {
                 let stride = self.iconst(Ty::I64, Self::stride(et));
                 let l = self.rtv("fl_list_new", &[cap, stride]);
                 if !vals.is_empty() {
-                    let data = self.load(Ty::I64, l, 16);
+                    let td = self.tag_data();
+                    let data = self.load_t(Ty::I64, l, 16, td);
                     let sz = Self::stride(et);
+                    let te = self.tag_elem(et);
                     for (i, v) in vals.into_iter().enumerate() {
-                        self.store(data, (i as i64 * sz) as i32, v);
+                        self.store_t(data, (i as i64 * sz) as i32, v, te);
                     }
                     let n = self.iconst(Ty::I64, elems.len() as i64);
-                    self.store(l, 0, n);
+                    let tl = self.tag_len();
+                    self.store_t(l, 0, n, tl);
                 }
                 l
             }
