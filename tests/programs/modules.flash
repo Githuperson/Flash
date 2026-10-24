@@ -1,0 +1,14 @@
+import helpers
+import std.math
+import std.text
+
+p = helpers.make_point(3, -4)
+say(p.x, p.y, helpers.manhattan(p))
+say(helpers.twice(21), helpers.twice(1.5))
+say(math.gcd(84, 36), math.lcm(4, 6), math.factorial(10), math.pow_int(2, 20))
+say(math.clamp(15, 0, 10), math.clamp(-2.5, 0.0, 1.0))
+say(math.is_prime(97), math.is_prime(100))
+nums = [4, 9, 2, 7]
+say(math.sum(nums), math.max_of(nums), math.min_of(nums))
+say(text.repeat("ab", 3), text.pad_left("7", 3, "0"), text.pad_right("x", 3, "."))
+say(text.count("banana", "an"), text.reverse("flash"), text.is_blank("   "))

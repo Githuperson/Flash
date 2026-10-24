@@ -1,0 +1,3 @@
+fn f():
+    x = parse_int("1")?
+    return x

@@ -1,0 +1,29 @@
+[package]
+name = "flash"
+version = "0.1.0"
+edition = "2021"
+description = "The Flash programming language compiler"
+license = "MIT"
+
+[lib]
+name = "flashc"
+path = "src/lib.rs"
+
+[[bin]]
+name = "flash"
+path = "src/main.rs"
+
+[[bin]]
+name = "flashpkg"
+path = "src/bin/flashpkg.rs"
+
+[dependencies]
+cranelift-codegen = { version = "0.137", features = ["all-arch"] }
+cranelift-frontend = "0.137"
+cranelift-module = "0.137"
+cranelift-object = "0.137"
+cranelift-native = "0.137"
+target-lexicon = "*"
+sha2 = "0.10"
+toml = "0.8"
+serde = { version = "1", features = ["derive"] }

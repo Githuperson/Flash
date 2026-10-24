@@ -1,0 +1,4 @@
+if True:
+    say(1)
+else if False:
+    say(2)

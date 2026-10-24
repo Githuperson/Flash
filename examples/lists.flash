@@ -1,0 +1,21 @@
+numbers = [10, 20, 30]
+say(numbers[0])
+append(numbers, 40)
+numbers.append(50)
+say(len(numbers))
+
+total = 0
+for n in numbers:
+    total += n
+say("total", total)
+
+names = ["Ada", "Grace", "Alan"]
+for name in names:
+    say(upper(name), len(name))
+say(join(names, ", "))
+
+squares: List[Int] = []
+for i in 0..5:
+    append(squares, i * i)
+say(squares[4], pop(squares), len(squares))
+say(numbers, names, [[1, 2], [3]])

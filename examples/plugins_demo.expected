@@ -1,0 +1,15 @@
+fast_math.add(40, 2) = 42
+fast_math.square(1.5) = 2.25
+fast_math.gcd(84, 36) = 12
+fast_math.is_prime(97) = True is_prime(91) = False
+FLASH!
+geometry.distance = 5.0
+geometry.clamp(15, 0, 10) = 10
+Window 'My App' (800x600) created by the C++ geometry plugin
+counter = 112
+42
+False division by zero in fast_math.checked_div
+cannot take the square root of a negative number
+4.0
+the plugin function panicked
+deliberate C++ exception

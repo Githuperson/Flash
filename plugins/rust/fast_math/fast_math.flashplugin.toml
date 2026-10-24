@@ -1,0 +1,43 @@
+# Manifest for the Rust example plugin (format documented in PLUGIN_ABI.md).
+[plugin]
+name = "fast_math"
+kind = "rust"
+abi_version = 1
+version = "0.1.0"
+library = "fast_math"       # libfast_math.so / libfast_math.dylib / fast_math.dll
+
+[[function]]
+name = "add"
+params = ["Int", "Int"]
+returns = "Int"
+
+[[function]]
+name = "square"
+params = ["Float"]
+returns = "Float"
+
+[[function]]
+name = "gcd"
+params = ["Int", "Int"]
+returns = "Int"
+
+[[function]]
+name = "is_prime"
+params = ["Int"]
+returns = "Bool"
+
+[[function]]
+name = "shout"
+params = ["String"]
+returns = "String"
+
+[[function]]
+name = "checked_div"
+params = ["Int", "Int"]
+returns = "Int"
+fallible = true
+
+[[function]]
+name = "always_panics"
+returns = "Int"
+fallible = true

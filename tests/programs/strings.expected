@@ -1,0 +1,21 @@
+12 HELLO, FLASH hello, flash
+Hello, Flash! 42 2.5 True
+True True True 7 -1
+HeLLo, FLash
+Flash True
+padded|
+4 a-b--c
+[a]
+[b]
+[]
+[c]
+Alex is 11; next year 12; {literal}
+True True True True
+65
+124
+False '12x' is not a valid Int
+5.0
+-1
+a	b\n
+no newline continues
+multi arg 1 2.0 True None

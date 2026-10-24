@@ -1,0 +1,4 @@
+struct P:
+    name: String
+p = P(name="a")
+n = p.name

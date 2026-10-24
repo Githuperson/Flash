@@ -1,0 +1,5 @@
+struct P:
+    n: Int
+fn f(p: P):
+    p.n = 5
+f(P(n=1))

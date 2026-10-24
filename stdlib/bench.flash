@@ -1,0 +1,11 @@
+# std.bench — timing helpers.
+#   import std.bench
+#   start = now_ns()
+#   ...
+#   say("took", bench.elapsed_ms(start), "ms")
+
+fn elapsed_ns(start: Int) -> Int:
+    return now_ns() - start
+
+fn elapsed_ms(start: Int) -> Float:
+    return float(now_ns() - start) / 1000000.0

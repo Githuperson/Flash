@@ -1,0 +1,34 @@
+total = 0
+for i in 0..3:
+    for j in 0..3:
+        if j == 2:
+            continue
+        if i == 2:
+            break
+        total += i * 10 + j
+say(total)
+
+x = 1
+if x == 1:
+    y = 10
+    x = y + 1
+say(x)
+
+count = 0
+while True:
+    count += 1
+    if count >= 5:
+        break
+say(count)
+
+i = 100
+for i in 0..2:
+    pass
+say(i)
+for k in 5..5:
+    say("never")
+for k in 3..=3:
+    say("once", k)
+n: u8 = 255
+for k in 253..=n:
+    say(k)

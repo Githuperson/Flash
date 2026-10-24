@@ -1,0 +1,15 @@
+struct Player:
+    name: String
+    score: Int
+
+fn bonus(p: Player) -> Int:
+    return p.score + 50
+
+fn level_up(mut p: Player):
+    p.score = p.score + 100
+
+player = Player(name="Alex", score=100)
+say(player.name)
+say(player.score)
+level_up(player)
+say(player.name, player.score, bonus(player))

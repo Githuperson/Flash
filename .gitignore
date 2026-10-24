@@ -1,0 +1,7 @@
+target/
+*.o
+*.obj
+build/
+/.flash-cache/
+benchmarks/out/
+benchmarks/results_raw.*

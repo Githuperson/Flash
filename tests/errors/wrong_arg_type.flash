@@ -1,0 +1,3 @@
+fn half(x: Float) -> Float:
+    return x / 2.0
+say(half(3))

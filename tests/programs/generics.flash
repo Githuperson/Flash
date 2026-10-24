@@ -1,0 +1,41 @@
+fn add(a, b):
+    return a + b
+
+fn double(x):
+    return add(x, x)
+
+fn pick(flag: Bool, own a, own b):
+    if flag:
+        return a
+    return b
+
+fn fact(n: Int) -> Int:
+    if n <= 1:
+        return 1
+    return n * fact(n - 1)
+
+fn is_even(n: Int) -> Bool:
+    if n == 0:
+        return True
+    return is_odd(n - 1)
+
+fn is_odd(n: Int) -> Bool:
+    if n == 0:
+        return False
+    return is_even(n - 1)
+
+fn collatz(n):
+    steps = 0
+    while n != 1:
+        if n % 2 == 0:
+            n = n / 2
+        else:
+            n = 3 * n + 1
+        steps += 1
+    return steps
+
+say(add(1, 2), add(1.5, 2.5), add("a", "b"))
+say(double(21), double(1.25), double("ab"))
+say(pick(True, 1, 2), pick(False, "x", "y"))
+say(fact(10), is_even(10), is_odd(7))
+say(collatz(27))

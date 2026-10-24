@@ -1,0 +1,726 @@
+//! IR optimisation passes: constant folding / propagation, copy propagation, dead-code
+//! elimination, control-flow simplification and (in release builds) function inlining.
+//!
+//! All passes work on the backend-independent IR and preserve behaviour exactly, including
+//! runtime checks (bounds, division by zero) which are separate branches in the IR.
+
+use std::collections::HashMap;
+
+use crate::ir::*;
+
+pub fn optimise(m: &mut Module, release: bool) {
+    for f in &mut m.funcs {
+        simplify(f);
+    }
+    if release {
+        inline_small_functions(m);
+        for f in &mut m.funcs {
+            simplify(f);
+        }
+    }
+    remove_unused_functions(m);
+}
+
+fn simplify(f: &mut Function) {
+    for _ in 0..8 {
+        let mut changed = false;
+        changed |= fold_constants(f);
+        changed |= simplify_cfg(f);
+        changed |= dead_code(f);
+        if !changed {
+            break;
+        }
+    }
+}
+
+// ----------------------------------------------------------------- helpers
+fn def_of(i: &Inst) -> Option<VReg> {
+    match i {
+        Inst::IConst { dst, .. }
+        | Inst::FConst { dst, .. }
+        | Inst::Copy { dst, .. }
+        | Inst::Bin { dst, .. }
+        | Inst::Cmp { dst, .. }
+        | Inst::Un { dst, .. }
+        | Inst::Cast { dst, .. }
+        | Inst::Load { dst, .. }
+        | Inst::DataAddr { dst, .. }
+        | Inst::StackAddr { dst, .. }
+        | Inst::Select { dst, .. } => Some(*dst),
+        Inst::Call { dst, .. } => *dst,
+        Inst::Store { .. } => None,
+    }
+}
+
+fn for_uses(i: &mut Inst, mut f: impl FnMut(&mut VReg)) {
+    match i {
+        Inst::IConst { .. } | Inst::FConst { .. } | Inst::DataAddr { .. } | Inst::StackAddr { .. } => {}
+        Inst::Copy { src, .. } | Inst::Cast { src, .. } => f(src),
+        Inst::Un { a, .. } => f(a),
+        Inst::Bin { a, b, .. } | Inst::Cmp { a, b, .. } => {
+            f(a);
+            f(b);
+        }
+        Inst::Load { base, .. } => f(base),
+        Inst::Store { base, val, .. } => {
+            f(base);
+            f(val);
+        }
+        Inst::Call { callee, args, .. } => {
+            if let Callee::Indirect(v) = callee {
+                f(v);
+            }
+            for a in args {
+                f(a);
+            }
+        }
+        Inst::Select { cond, a, b, .. } => {
+            f(cond);
+            f(a);
+            f(b);
+        }
+    }
+}
+
+fn term_uses(t: &mut Term, mut f: impl FnMut(&mut VReg)) {
+    match t {
+        Term::Br { cond, .. } => f(cond),
+        Term::Ret(Some(v)) => f(v),
+        _ => {}
+    }
+}
+
+fn is_pure(i: &Inst) -> bool {
+    !matches!(i, Inst::Store { .. } | Inst::Call { .. })
+}
+
+/// Canonical form of an integer constant of type `ty` (sign-extended from its width).
+fn canon(ty: Ty, v: i64) -> i64 {
+    match ty {
+        Ty::I8 => v as i8 as i64,
+        Ty::I16 => v as i16 as i64,
+        Ty::I32 => v as i32 as i64,
+        _ => v,
+    }
+}
+
+fn ubits(ty: Ty, v: i64) -> u64 {
+    match ty {
+        Ty::I8 => v as u8 as u64,
+        Ty::I16 => v as u16 as u64,
+        Ty::I32 => v as u32 as u64,
+        _ => v as u64,
+    }
+}
+
+#[derive(Clone, Copy)]
+enum K {
+    I(i64),
+    F(f64),
+}
+
+// --------------------------------------------------------- constant folding
+fn fold_constants(f: &mut Function) -> bool {
+    let nparams = f.params.len();
+    let mut defs = vec![0u32; f.vregs.len()];
+    for d in defs.iter_mut().take(nparams) {
+        *d += 1;
+    }
+    for b in &f.blocks {
+        for i in &b.insts {
+            if let Some(d) = def_of(i) {
+                defs[d as usize] += 1;
+            }
+        }
+    }
+    // single-definition constants and copies
+    let mut consts: HashMap<VReg, K> = HashMap::new();
+    let mut copies: HashMap<VReg, VReg> = HashMap::new();
+    for b in &f.blocks {
+        for i in &b.insts {
+            match i {
+                Inst::IConst { dst, val } if defs[*dst as usize] == 1 => {
+                    consts.insert(*dst, K::I(canon(f.vregs[*dst as usize], *val)));
+                }
+                Inst::FConst { dst, val } if defs[*dst as usize] == 1 => {
+                    consts.insert(*dst, K::F(*val));
+                }
+                Inst::Copy { dst, src } if defs[*dst as usize] == 1 && defs[*src as usize] == 1 => {
+                    copies.insert(*dst, *src);
+                }
+                _ => {}
+            }
+        }
+    }
+    let resolve = |mut v: VReg| {
+        let mut n = 0;
+        while let Some(s) = copies.get(&v) {
+            v = *s;
+            n += 1;
+            if n > 64 {
+                break;
+            }
+        }
+        v
+    };
+    let mut changed = false;
+    let vregs = f.vregs.clone();
+    for b in &mut f.blocks {
+        for i in &mut b.insts {
+            // copy propagation
+            let mut local_change = false;
+            for_uses(i, |u| {
+                let r = resolve(*u);
+                if r != *u {
+                    *u = r;
+                    local_change = true;
+                }
+            });
+            changed |= local_change;
+            let get = |v: VReg| consts.get(&v).copied();
+            let replacement: Option<Inst> = match i {
+                Inst::Copy { dst, src } => match get(*src) {
+                    Some(K::I(v)) => Some(Inst::IConst { dst: *dst, val: v }),
+                    Some(K::F(v)) => Some(Inst::FConst { dst: *dst, val: v }),
+                    None => None,
+                },
+                Inst::Bin { dst, op, a, b: bb } => {
+                    let ty = vregs[*a as usize];
+                    match (get(*a), get(*bb)) {
+                        (Some(K::I(x)), Some(K::I(y))) => fold_int_bin(*op, ty, x, y).map(|v| Inst::IConst { dst: *dst, val: v }),
+                        (Some(K::F(x)), Some(K::F(y))) => fold_float_bin(*op, x, y).map(|v| Inst::FConst { dst: *dst, val: v }),
+                        (_, Some(K::I(y))) => identity_rhs(*op, y).then_some(Inst::Copy { dst: *dst, src: *a }),
+                        (Some(K::I(x)), _) => identity_lhs(*op, x).then_some(Inst::Copy { dst: *dst, src: *bb }),
+                        _ => None,
+                    }
+                }
+                Inst::Cmp { dst, op, a, b: bb } => {
+                    let ty = vregs[*a as usize];
+                    match (get(*a), get(*bb)) {
+                        (Some(K::I(x)), Some(K::I(y))) => Some(Inst::IConst { dst: *dst, val: fold_icmp(*op, ty, x, y) as i64 }),
+                        (Some(K::F(x)), Some(K::F(y))) => Some(Inst::IConst { dst: *dst, val: fold_fcmp(*op, x, y) as i64 }),
+                        _ => None,
+                    }
+                }
+                Inst::Un { dst, op, a } => {
+                    let ty = vregs[*a as usize];
+                    match (get(*a), op) {
+                        (Some(K::I(x)), UnOp::Neg) => Some(Inst::IConst { dst: *dst, val: canon(ty, x.wrapping_neg()) }),
+                        (Some(K::I(x)), UnOp::Not) => Some(Inst::IConst { dst: *dst, val: canon(ty, !x) }),
+                        (Some(K::F(x)), UnOp::FNeg) => Some(Inst::FConst { dst: *dst, val: -x }),
+                        (Some(K::F(x)), UnOp::FSqrt) => Some(Inst::FConst { dst: *dst, val: x.sqrt() }),
+                        (Some(K::F(x)), UnOp::FAbs) => Some(Inst::FConst { dst: *dst, val: x.abs() }),
+                        (Some(K::F(x)), UnOp::FFloor) => Some(Inst::FConst { dst: *dst, val: x.floor() }),
+                        (Some(K::F(x)), UnOp::FCeil) => Some(Inst::FConst { dst: *dst, val: x.ceil() }),
+                        _ => None,
+                    }
+                }
+                Inst::Cast { dst, op, src } => {
+                    let from = vregs[*src as usize];
+                    let to = vregs[*dst as usize];
+                    match (get(*src), op) {
+                        (Some(K::I(x)), CastOp::ZExt) => Some(Inst::IConst { dst: *dst, val: canon(to, ubits(from, x) as i64) }),
+                        (Some(K::I(x)), CastOp::SExt) => Some(Inst::IConst { dst: *dst, val: x }),
+                        (Some(K::I(x)), CastOp::Trunc) => Some(Inst::IConst { dst: *dst, val: canon(to, x) }),
+                        (Some(K::I(x)), CastOp::SToF) => Some(Inst::FConst { dst: *dst, val: x as f64 }),
+                        (Some(K::I(x)), CastOp::UToF) => Some(Inst::FConst { dst: *dst, val: ubits(from, x) as f64 }),
+                        (Some(K::F(x)), CastOp::FToS) => Some(Inst::IConst { dst: *dst, val: x as i64 }),
+                        (Some(K::F(x)), CastOp::FToU) => Some(Inst::IConst { dst: *dst, val: x as u64 as i64 }),
+                        _ => None,
+                    }
+                }
+                Inst::Select { dst, cond, a, b: bb } => match get(*cond) {
+                    Some(K::I(c)) => Some(Inst::Copy { dst: *dst, src: if c & 1 != 0 { *a } else { *bb } }),
+                    _ => None,
+                },
+                _ => None,
+            };
+            if let Some(r) = replacement {
+                *i = r;
+                changed = true;
+            }
+        }
+        term_uses(&mut b.term, |u| {
+            let r = resolve(*u);
+            if r != *u {
+                *u = r;
+                changed = true;
+            }
+        });
+        if let Term::Br { cond, then_, else_ } = &b.term {
+            if let Some(K::I(c)) = consts.get(cond) {
+                b.term = Term::Jump(if c & 1 != 0 { *then_ } else { *else_ });
+                changed = true;
+            } else if then_ == else_ {
+                b.term = Term::Jump(*then_);
+                changed = true;
+            }
+        }
+    }
+    changed
+}
+
+fn identity_rhs(op: BinOp, y: i64) -> bool {
+    matches!(
+        (op, y),
+        (BinOp::Add | BinOp::Sub | BinOp::Or | BinOp::Xor | BinOp::Shl | BinOp::SShr | BinOp::UShr, 0)
+            | (BinOp::Mul | BinOp::SDiv | BinOp::UDiv, 1)
+    )
+}
+fn identity_lhs(op: BinOp, x: i64) -> bool {
+    matches!((op, x), (BinOp::Add | BinOp::Or | BinOp::Xor, 0) | (BinOp::Mul, 1))
+}
+
+fn fold_int_bin(op: BinOp, ty: Ty, x: i64, y: i64) -> Option<i64> {
+    let r = match op {
+        BinOp::Add => x.wrapping_add(y),
+        BinOp::Sub => x.wrapping_sub(y),
+        BinOp::Mul => x.wrapping_mul(y),
+        BinOp::SDiv => {
+            if y == 0 || (y == -1 && x == i64::MIN) {
+                return None;
+            }
+            x / y
+        }
+        BinOp::SRem => {
+            if y == 0 || y == -1 {
+                return None;
+            }
+            x % y
+        }
+        BinOp::UDiv => {
+            let (a, b) = (ubits(ty, x), ubits(ty, y));
+            if b == 0 {
+                return None;
+            }
+            (a / b) as i64
+        }
+        BinOp::URem => {
+            let (a, b) = (ubits(ty, x), ubits(ty, y));
+            if b == 0 {
+                return None;
+            }
+            (a % b) as i64
+        }
+        BinOp::And => x & y,
+        BinOp::Or => x | y,
+        BinOp::Xor => x ^ y,
+        BinOp::Shl => x.wrapping_shl((y as u32) & (ty.bytes() * 8 - 1)),
+        BinOp::SShr => x >> ((y as u32) & (ty.bytes() * 8 - 1)),
+        BinOp::UShr => (ubits(ty, x) >> ((y as u32) & (ty.bytes() * 8 - 1))) as i64,
+        _ => return None,
+    };
+    Some(canon(ty, r))
+}
+
+fn fold_float_bin(op: BinOp, x: f64, y: f64) -> Option<f64> {
+    Some(match op {
+        BinOp::FAdd => x + y,
+        BinOp::FSub => x - y,
+        BinOp::FMul => x * y,
+        BinOp::FDiv => x / y,
+        _ => return None,
+    })
+}
+
+fn fold_icmp(op: CmpOp, ty: Ty, x: i64, y: i64) -> bool {
+    let (ux, uy) = (ubits(ty, x), ubits(ty, y));
+    match op {
+        CmpOp::Eq => x == y,
+        CmpOp::Ne => x != y,
+        CmpOp::SLt => x < y,
+        CmpOp::SLe => x <= y,
+        CmpOp::SGt => x > y,
+        CmpOp::SGe => x >= y,
+        CmpOp::ULt => ux < uy,
+        CmpOp::ULe => ux <= uy,
+        CmpOp::UGt => ux > uy,
+        CmpOp::UGe => ux >= uy,
+        _ => false,
+    }
+}
+
+fn fold_fcmp(op: CmpOp, x: f64, y: f64) -> bool {
+    match op {
+        CmpOp::FEq => x == y,
+        CmpOp::FNe => x != y,
+        CmpOp::FLt => x < y,
+        CmpOp::FLe => x <= y,
+        CmpOp::FGt => x > y,
+        CmpOp::FGe => x >= y,
+        _ => false,
+    }
+}
+
+// ------------------------------------------------------------ CFG cleanup
+fn successors(t: &Term) -> Vec<BlockId> {
+    match t {
+        Term::Jump(b) => vec![*b],
+        Term::Br { then_, else_, .. } => vec![*then_, *else_],
+        _ => vec![],
+    }
+}
+
+fn simplify_cfg(f: &mut Function) -> bool {
+    let mut changed = false;
+    // 1. thread jumps through empty blocks
+    let n = f.blocks.len();
+    let mut target: Vec<BlockId> = (0..n as u32).collect();
+    for i in 0..n {
+        if f.blocks[i].insts.is_empty() {
+            if let Term::Jump(t) = f.blocks[i].term {
+                if t as usize != i {
+                    target[i] = t;
+                }
+            }
+        }
+    }
+    let resolve = |mut b: BlockId| {
+        for _ in 0..16 {
+            let t = target[b as usize];
+            if t == b {
+                break;
+            }
+            b = t;
+        }
+        b
+    };
+    for b in &mut f.blocks {
+        match &mut b.term {
+            Term::Jump(t) => {
+                let r = resolve(*t);
+                if r != *t {
+                    *t = r;
+                    changed = true;
+                }
+            }
+            Term::Br { then_, else_, .. } => {
+                for t in [then_, else_] {
+                    let r = resolve(*t);
+                    if r != *t {
+                        *t = r;
+                        changed = true;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    // 2. merge a block into its unique predecessor
+    loop {
+        let mut preds = vec![0u32; f.blocks.len()];
+        let mut reachable = vec![false; f.blocks.len()];
+        reachable[0] = true;
+        let mut stack = vec![0usize];
+        while let Some(b) = stack.pop() {
+            for s in successors(&f.blocks[b].term) {
+                preds[s as usize] += 1;
+                if !reachable[s as usize] {
+                    reachable[s as usize] = true;
+                    stack.push(s as usize);
+                }
+            }
+        }
+        let mut merged = false;
+        for a in 0..f.blocks.len() {
+            if !reachable[a] {
+                continue;
+            }
+            if let Term::Jump(b) = f.blocks[a].term {
+                let b = b as usize;
+                if b != a && b != 0 && preds[b] == 1 {
+                    let blk = std::mem::replace(&mut f.blocks[b], Block { insts: vec![], term: Term::Unreachable });
+                    f.blocks[a].insts.extend(blk.insts);
+                    f.blocks[a].term = blk.term;
+                    merged = true;
+                    changed = true;
+                    break;
+                }
+            }
+        }
+        if !merged {
+            break;
+        }
+    }
+    // 3. drop unreachable blocks and renumber
+    let mut reachable = vec![false; f.blocks.len()];
+    reachable[0] = true;
+    let mut stack = vec![0usize];
+    while let Some(b) = stack.pop() {
+        for s in successors(&f.blocks[b].term) {
+            if !reachable[s as usize] {
+                reachable[s as usize] = true;
+                stack.push(s as usize);
+            }
+        }
+    }
+    if reachable.iter().any(|r| !r) {
+        let mut remap = vec![u32::MAX; f.blocks.len()];
+        let mut next = 0;
+        for (i, r) in reachable.iter().enumerate() {
+            if *r {
+                remap[i] = next;
+                next += 1;
+            }
+        }
+        let old = std::mem::take(&mut f.blocks);
+        for (i, mut b) in old.into_iter().enumerate() {
+            if !reachable[i] {
+                continue;
+            }
+            match &mut b.term {
+                Term::Jump(t) => *t = remap[*t as usize],
+                Term::Br { then_, else_, .. } => {
+                    *then_ = remap[*then_ as usize];
+                    *else_ = remap[*else_ as usize];
+                }
+                _ => {}
+            }
+            f.blocks.push(b);
+        }
+        changed = true;
+    }
+    changed
+}
+
+// ------------------------------------------------------- dead-code removal
+fn dead_code(f: &mut Function) -> bool {
+    let mut changed = false;
+    loop {
+        let mut uses = vec![0u32; f.vregs.len()];
+        for b in &mut f.blocks {
+            for i in &mut b.insts {
+                for_uses(i, |u| uses[*u as usize] += 1);
+            }
+            term_uses(&mut b.term, |u| uses[*u as usize] += 1);
+        }
+        let mut removed = false;
+        for b in &mut f.blocks {
+            let before = b.insts.len();
+            b.insts.retain(|i| match def_of(i) {
+                Some(d) if is_pure(i) => uses[d as usize] > 0,
+                _ => true,
+            });
+            if b.insts.len() != before {
+                removed = true;
+            }
+        }
+        if !removed {
+            break;
+        }
+        changed = true;
+    }
+    changed
+}
+
+// ---------------------------------------------------------------- inlining
+fn inst_count(f: &Function) -> usize {
+    f.blocks.iter().map(|b| b.insts.len() + 1).sum()
+}
+
+fn calls_func(f: &Function, target: u32) -> bool {
+    f.blocks.iter().any(|b| b.insts.iter().any(|i| matches!(i, Inst::Call { callee: Callee::Func(c), .. } if *c == target)))
+}
+
+const INLINE_LIMIT: usize = 60;
+
+fn inline_small_functions(m: &mut Module) {
+    for _round in 0..3 {
+        let candidates: Vec<Option<Function>> = m
+            .funcs
+            .iter()
+            .enumerate()
+            .map(|(i, f)| {
+                let ok = !f.exported && !f.no_inline && inst_count(f) <= INLINE_LIMIT && !calls_func(f, i as u32);
+                ok.then(|| f.clone())
+            })
+            .collect();
+        let mut any = false;
+        for fi in 0..m.funcs.len() {
+            let mut f = std::mem::replace(&mut m.funcs[fi], placeholder());
+            any |= inline_into(&mut f, fi as u32, &candidates);
+            m.funcs[fi] = f;
+        }
+        if !any {
+            break;
+        }
+    }
+}
+
+fn placeholder() -> Function {
+    Function {
+        name: String::new(),
+        params: vec![],
+        ret: None,
+        vregs: vec![],
+        blocks: vec![],
+        stack_slots: vec![],
+        exported: false,
+        no_inline: true,
+    }
+}
+
+fn inline_into(f: &mut Function, self_idx: u32, cands: &[Option<Function>]) -> bool {
+    let mut did = false;
+    let mut budget = 200; // bound total growth
+    'outer: loop {
+        for bi in 0..f.blocks.len() {
+            for ii in 0..f.blocks[bi].insts.len() {
+                let Inst::Call { dst, callee: Callee::Func(c), args } = f.blocks[bi].insts[ii].clone() else { continue };
+                if c == self_idx {
+                    continue;
+                }
+                let Some(callee) = &cands[c as usize] else { continue };
+                if budget == 0 {
+                    break 'outer;
+                }
+                budget -= 1;
+                splice(f, bi, ii, dst, &args, callee);
+                did = true;
+                continue 'outer;
+            }
+        }
+        break;
+    }
+    did
+}
+
+/// Replace the call at (bi, ii) with the body of `callee`.
+fn splice(f: &mut Function, bi: usize, ii: usize, dst: Option<VReg>, args: &[VReg], callee: &Function) {
+    let vbase = f.vregs.len() as u32;
+    f.vregs.extend(callee.vregs.iter().copied());
+    let sbase = f.stack_slots.len() as u32;
+    f.stack_slots.extend(callee.stack_slots.iter().copied());
+    let bbase = f.blocks.len() as u32 + 1; // block 0 of the callee goes at index bbase
+                                           // continuation block: instructions after the call + original terminator
+    let tail: Vec<Inst> = f.blocks[bi].insts.split_off(ii + 1);
+    f.blocks[bi].insts.pop(); // the call itself
+    let old_term = std::mem::replace(&mut f.blocks[bi].term, Term::Jump(bbase));
+    let cont_id = f.blocks.len() as u32;
+    f.blocks.push(Block { insts: tail, term: old_term });
+    // bind parameters
+    for (i, a) in args.iter().enumerate() {
+        f.blocks[bi].insts.push(Inst::Copy { dst: vbase + i as u32, src: *a });
+    }
+    for cb in &callee.blocks {
+        let mut insts: Vec<Inst> = vec![];
+        for inst in &cb.insts {
+            let mut ni = inst.clone();
+            remap_inst(&mut ni, vbase, sbase);
+            insts.push(ni);
+        }
+        let term = match &cb.term {
+            Term::Jump(t) => Term::Jump(t + bbase),
+            Term::Br { cond, then_, else_ } => Term::Br { cond: cond + vbase, then_: then_ + bbase, else_: else_ + bbase },
+            Term::Ret(v) => {
+                if let (Some(d), Some(v)) = (dst, v) {
+                    insts.push(Inst::Copy { dst: d, src: *v + vbase });
+                }
+                Term::Jump(cont_id)
+            }
+            Term::Unreachable => Term::Unreachable,
+        };
+        f.blocks.push(Block { insts, term });
+    }
+}
+
+fn remap_inst(i: &mut Inst, vbase: u32, sbase: u32) {
+    match i {
+        Inst::IConst { dst, .. } | Inst::FConst { dst, .. } | Inst::DataAddr { dst, .. } => *dst += vbase,
+        Inst::StackAddr { dst, slot } => {
+            *dst += vbase;
+            *slot += sbase;
+        }
+        Inst::Copy { dst, src } | Inst::Cast { dst, src, .. } => {
+            *dst += vbase;
+            *src += vbase;
+        }
+        Inst::Un { dst, a, .. } => {
+            *dst += vbase;
+            *a += vbase;
+        }
+        Inst::Bin { dst, a, b, .. } | Inst::Cmp { dst, a, b, .. } => {
+            *dst += vbase;
+            *a += vbase;
+            *b += vbase;
+        }
+        Inst::Load { dst, base, .. } => {
+            *dst += vbase;
+            *base += vbase;
+        }
+        Inst::Store { base, val, .. } => {
+            *base += vbase;
+            *val += vbase;
+        }
+        Inst::Call { dst, callee, args } => {
+            if let Some(d) = dst {
+                *d += vbase;
+            }
+            if let Callee::Indirect(v) = callee {
+                *v += vbase;
+            }
+            for a in args {
+                *a += vbase;
+            }
+        }
+        Inst::Select { dst, cond, a, b } => {
+            *dst += vbase;
+            *cond += vbase;
+            *a += vbase;
+            *b += vbase;
+        }
+    }
+}
+
+// ------------------------------------------------------ unused functions
+/// Drop functions that are never called (glue that got fully inlined, unused user functions).
+/// Function indices are call targets, so unused functions are replaced by empty stubs would
+/// break numbering; instead we renumber.
+fn remove_unused_functions(m: &mut Module) {
+    let n = m.funcs.len();
+    let mut live = vec![false; n];
+    let mut stack = vec![];
+    for (i, f) in m.funcs.iter().enumerate() {
+        if f.exported {
+            live[i] = true;
+            stack.push(i);
+        }
+    }
+    while let Some(i) = stack.pop() {
+        for b in &m.funcs[i].blocks {
+            for inst in &b.insts {
+                if let Inst::Call { callee: Callee::Func(c), .. } = inst {
+                    if !live[*c as usize] {
+                        live[*c as usize] = true;
+                        stack.push(*c as usize);
+                    }
+                }
+            }
+        }
+    }
+    if live.iter().all(|l| *l) {
+        return;
+    }
+    let mut remap = vec![u32::MAX; n];
+    let mut next = 0;
+    for i in 0..n {
+        if live[i] {
+            remap[i] = next;
+            next += 1;
+        }
+    }
+    let old = std::mem::take(&mut m.funcs);
+    for (i, mut f) in old.into_iter().enumerate() {
+        if !live[i] {
+            continue;
+        }
+        for b in &mut f.blocks {
+            for inst in &mut b.insts {
+                if let Inst::Call { callee: Callee::Func(c), .. } = inst {
+                    *c = remap[*c as usize];
+                }
+            }
+        }
+        m.funcs.push(f);
+    }
+}

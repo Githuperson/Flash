@@ -1,0 +1,12 @@
+[package]
+name = "fast_math"
+version = "0.1.0"
+kind = "native-plugin"
+
+[native]
+supported_os = ["linux", "macos", "windows"]
+supported_arch = ["x86_64", "aarch64"]
+abi_version = 1
+min_rustc = "1.70"
+build = "cargo build --release -p fast_math"
+library_dir = "../../../target/release"

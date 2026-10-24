@@ -1,0 +1,13 @@
+# String processing: build, join, split and scan 300,000 words.
+words: List[String] = []
+for i in 0..300000:
+    append(words, "w" + str(i))
+text = join(words, " ")
+parts = split(text, " ")
+total = 0
+sevens = 0
+for p in parts:
+    total += len(p)
+    if contains(p, "7"):
+        sevens += 1
+say(len(text), len(parts), total, sevens)

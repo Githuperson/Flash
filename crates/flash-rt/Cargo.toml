@@ -1,0 +1,15 @@
+[package]
+name = "flash-rt"
+version = "0.1.0"
+edition = "2021"
+description = "Flash runtime: linked into every compiled Flash program"
+license = "MIT"
+
+[lib]
+name = "flash_rt"
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+libloading = "0.9"
+flash-plugin-sdk = { path = "../flash-plugin-sdk" }
+sha2 = "0.10"
