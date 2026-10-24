@@ -1,0 +1,211 @@
+//! Backend-independent low-level IR.
+//!
+//! A function is a control-flow graph of basic blocks over *mutable* virtual registers
+//! (not SSA); the Cranelift backend builds SSA from them. All heap values are `I64` pointers.
+
+use std::fmt;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Ty {
+    I8,
+    I16,
+    I32,
+    I64,
+    F64,
+}
+
+impl Ty {
+    pub fn bytes(self) -> u32 {
+        match self {
+            Ty::I8 => 1,
+            Ty::I16 => 2,
+            Ty::I32 => 4,
+            Ty::I64 | Ty::F64 => 8,
+        }
+    }
+    pub fn is_float(self) -> bool {
+        self == Ty::F64
+    }
+}
+
+pub type VReg = u32;
+pub type BlockId = u32;
+pub type FuncRef = u32;
+pub type ExternRef = u32;
+pub type DataId = u32;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BinOp {
+    Add,
+    Sub,
+    Mul,
+    SDiv,
+    UDiv,
+    SRem,
+    URem,
+    And,
+    Or,
+    Xor,
+    Shl,
+    SShr,
+    UShr,
+    FAdd,
+    FSub,
+    FMul,
+    FDiv,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CmpOp {
+    Eq,
+    Ne,
+    SLt,
+    SLe,
+    SGt,
+    SGe,
+    ULt,
+    ULe,
+    UGt,
+    UGe,
+    FEq,
+    FNe,
+    FLt,
+    FLe,
+    FGt,
+    FGe,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UnOp {
+    Neg,
+    Not,
+    FNeg,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CastOp {
+    /// Zero-extend an integer to a wider type.
+    ZExt,
+    SExt,
+    /// Truncate to a narrower integer.
+    Trunc,
+    SToF,
+    UToF,
+    /// Saturating float → signed int.
+    FToS,
+    FToU,
+    /// Reinterpret float bits as I64 and back.
+    FBitsToI,
+    IBitsToF,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Callee {
+    Func(FuncRef),
+    Extern(ExternRef),
+    Indirect(VReg),
+}
+
+#[derive(Clone, Debug)]
+pub enum Inst {
+    IConst { dst: VReg, val: i64 },
+    FConst { dst: VReg, val: f64 },
+    Copy { dst: VReg, src: VReg },
+    Bin { dst: VReg, op: BinOp, a: VReg, b: VReg },
+    Cmp { dst: VReg, op: CmpOp, a: VReg, b: VReg },
+    Un { dst: VReg, op: UnOp, a: VReg },
+    Cast { dst: VReg, op: CastOp, src: VReg },
+    Load { dst: VReg, base: VReg, off: i32 },
+    Store { base: VReg, off: i32, val: VReg },
+    Call { dst: Option<VReg>, callee: Callee, args: Vec<VReg> },
+    /// Address of read-only/static data.
+    DataAddr { dst: VReg, data: DataId },
+    /// Address of a function-local stack slot.
+    StackAddr { dst: VReg, slot: u32 },
+    /// dst = cond ? a : b
+    Select { dst: VReg, cond: VReg, a: VReg, b: VReg },
+}
+
+#[derive(Clone, Debug)]
+pub enum Term {
+    Jump(BlockId),
+    Br { cond: VReg, then_: BlockId, else_: BlockId },
+    Ret(Option<VReg>),
+    Unreachable,
+}
+
+#[derive(Clone, Debug)]
+pub struct Block {
+    pub insts: Vec<Inst>,
+    pub term: Term,
+}
+
+#[derive(Clone, Debug)]
+pub struct Function {
+    pub name: String,
+    /// Parameter vregs are `0..params.len()`.
+    pub params: Vec<Ty>,
+    pub ret: Option<Ty>,
+    pub vregs: Vec<Ty>,
+    pub blocks: Vec<Block>,
+    pub stack_slots: Vec<u32>,
+    pub exported: bool,
+    /// Never inline (e.g. recursive or large).
+    pub no_inline: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct ExternDecl {
+    pub name: String,
+    pub params: Vec<Ty>,
+    pub ret: Option<Ty>,
+}
+
+#[derive(Clone, Debug)]
+pub struct DataItem {
+    pub name: String,
+    pub bytes: Vec<u8>,
+    pub align: u32,
+    pub writable: bool,
+}
+
+#[derive(Debug, Default)]
+pub struct Module {
+    pub funcs: Vec<Function>,
+    pub externs: Vec<ExternDecl>,
+    pub data: Vec<DataItem>,
+}
+
+impl Module {
+    pub fn extern_ref(&mut self, name: &str, params: &[Ty], ret: Option<Ty>) -> ExternRef {
+        if let Some(i) = self.externs.iter().position(|e| e.name == name) {
+            return i as u32;
+        }
+        self.externs.push(ExternDecl { name: name.to_string(), params: params.to_vec(), ret });
+        (self.externs.len() - 1) as u32
+    }
+}
+
+impl Function {
+    pub fn new_vreg(&mut self, ty: Ty) -> VReg {
+        self.vregs.push(ty);
+        (self.vregs.len() - 1) as u32
+    }
+}
+
+impl fmt::Display for Module {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for func in &self.funcs {
+            writeln!(f, "fn {}({:?}) -> {:?} {{", func.name, func.params, func.ret)?;
+            for (i, b) in func.blocks.iter().enumerate() {
+                writeln!(f, "  b{}:", i)?;
+                for inst in &b.insts {
+                    writeln!(f, "    {:?}", inst)?;
+                }
+                writeln!(f, "    {:?}", b.term)?;
+            }
+            writeln!(f, "}}")?;
+        }
+        Ok(())
+    }
+}

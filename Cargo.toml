@@ -1,0 +1,12 @@
+[workspace]
+resolver = "2"
+members = ["crates/flash", "crates/flash-rt", "crates/flash-plugin-sdk", "plugins/rust/fast_math"]
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 4
+
+# The runtime is linked into every Flash program, so keep it fast even in dev builds.
+[profile.dev.package.flash-rt]
+opt-level = 3

@@ -1,0 +1,19 @@
+fn add(a, b):
+    return a + b
+
+fn fib(n):
+    if n < 2:
+        return n
+    return fib(n - 1) + fib(n - 2)
+
+fn greet(name: String, times: Int) -> String:
+    result = ""
+    for i in 0..times:
+        result = result + "Hello, " + name + "! "
+    return result
+
+say(add(10, 20))
+say(add(1.5, 2.25))
+say(add("Fl", "ash"))
+say(fib(20))
+say(greet("Alex", 2))

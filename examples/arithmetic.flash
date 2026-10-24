@@ -1,0 +1,25 @@
+# Arithmetic and variables
+name = "Alex"
+age = 11
+score = 100.5
+is_ready = True
+
+say(name)
+say(age)
+say(score)
+say(is_ready)
+
+say(7 + 3 * 2)        # 13
+say(17 / 5)           # 3   (integer division truncates toward zero)
+say(17 % 5)           # 2
+say(-17 / 5)          # -3
+say(2.5 * 4.0)        # 10.0
+say(7.0 / 2.0)        # 3.5
+say(age * 2 + 1)
+say(1 << 10, 255 & 15, 5 | 2, 6 ^ 3)
+
+total = 0
+total += 5
+total *= 3
+say(total)
+say(f"{name} is {age} years old and scored {score}")

@@ -1,0 +1,14 @@
+//! Names of the built-in functions of the Flash standard library.
+
+pub const BUILTIN_NAMES: &[&str] = &[
+    "say", "print", "str", "int", "float", "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "len", "append", "pop",
+    "copy", "abs", "min", "max", "sqrt", "floor", "ceil", "sin", "cos", "tan", "exp", "ln", "pow", "exit", "assert",
+    "now_ns", "args", "read_line", "upper", "lower", "trim", "contains", "starts_with", "ends_with", "replace", "split",
+    "join", "find", "substr", "byte_at", "parse_int", "parse_float", "read_file", "write_file", "append_file",
+    "file_exists", "remove_file", "env_var", "path_join", "path_filename", "path_parent", "path_extension",
+    "sleep_ms", "ok", "fail", "is_ok", "unwrap", "unwrap_or", "error_message",
+];
+
+pub fn is_builtin(name: &str) -> bool {
+    BUILTIN_NAMES.contains(&name)
+}

@@ -1,0 +1,18 @@
+# 0..5 includes 0 and excludes 5
+for i in 0..5:
+    say(i)
+
+# ..= includes the upper bound
+total = 0
+for i in 1..=100:
+    total += i
+say("sum 1..=100 =", total)
+
+n = 0
+while n < 10:
+    n += 1
+    if n % 2 == 0:
+        continue
+    if n > 7:
+        break
+    say("odd", n)

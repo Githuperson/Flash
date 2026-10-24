@@ -1,0 +1,6 @@
+target/
+*.o
+*.obj
+/build/
+/.flash-cache/
+bench/out/

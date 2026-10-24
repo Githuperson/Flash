@@ -1,0 +1,333 @@
+//! Compilation driver: loads source files and imports, runs the stages, links executables.
+
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+use crate::ast::{Item, PluginKind};
+use crate::diag::{self, Diagnostic, Diagnostics};
+use crate::hir::{PluginBinding, Program};
+use crate::module::LoadedModule;
+use crate::source::{SourceMap, Span};
+
+#[derive(Clone, Debug, Default)]
+pub struct BuildOptions {
+    pub release: bool,
+    pub target: Option<String>,
+    pub output: Option<PathBuf>,
+    pub emit_ir: bool,
+    /// Only produce the object file (needed when cross-compiling without a cross linker).
+    pub emit_obj_only: bool,
+    /// Extra Flash source appended to the root module (used by `flash test`).
+    pub source_suffix: Option<String>,
+}
+
+pub struct Frontend {
+    pub sources: SourceMap,
+    pub program: Program,
+}
+
+pub fn stdlib_dir() -> Option<PathBuf> {
+    if let Some(p) = std::env::var_os("FLASH_STD") {
+        return Some(PathBuf::from(p));
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        let mut d = exe.parent().map(|p| p.to_path_buf());
+        for _ in 0..4 {
+            if let Some(dir) = &d {
+                let c = dir.join("stdlib");
+                if c.is_dir() {
+                    return Some(c);
+                }
+                d = dir.parent().map(|p| p.to_path_buf());
+            }
+        }
+    }
+    let dev = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../stdlib");
+    dev.is_dir().then_some(dev)
+}
+
+struct Loader {
+    sources: SourceMap,
+    diags: Diagnostics,
+    mods: Vec<LoadedModule>,
+    by_path: HashMap<PathBuf, usize>,
+    plugins: Vec<PluginBinding>,
+    in_progress: Vec<PathBuf>,
+}
+
+impl Loader {
+    fn load(&mut self, path: &Path, alias: String, suffix: Option<&str>, import_span: Option<Span>) -> Option<usize> {
+        let canon = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        if let Some(i) = self.by_path.get(&canon) {
+            return Some(*i);
+        }
+        if self.in_progress.contains(&canon) {
+            if let Some(sp) = import_span {
+                self.diags.push(Diagnostic::error(sp, "These modules import each other in a circle.").help("Move the shared code into a third module."));
+            }
+            return None;
+        }
+        let mut text = match std::fs::read_to_string(path) {
+            Ok(t) => t,
+            Err(e) => {
+                let msg = format!("cannot read '{}': {}", path.display(), e);
+                match import_span {
+                    Some(sp) => self.diags.push(Diagnostic::error(sp, msg)),
+                    None => self.diags.push(Diagnostic::error_nospan(msg)),
+                }
+                return None;
+            }
+        };
+        if let Some(s) = suffix {
+            text.push('\n');
+            text.push_str(s);
+        }
+        let display = path.display().to_string();
+        let file = self.sources.add(canon.clone(), display.trim_start_matches("./").to_string(), text.clone());
+        let ast = crate::parser::parse_module(&text, file, &mut self.diags);
+        let idx = self.mods.len();
+        self.mods.push(LoadedModule { alias, ast, imports: vec![], plugins: vec![] });
+        self.by_path.insert(canon.clone(), idx);
+        self.in_progress.push(canon.clone());
+        let dir = path.parent().map(|p| p.to_path_buf()).unwrap_or_default();
+        let items: Vec<Item> = self.mods[idx].ast.items.clone();
+        for it in &items {
+            match it {
+                Item::Import(imp) => {
+                    let alias = imp.path.last().cloned().unwrap_or_default();
+                    let mut file_path = if imp.path[0] == "std" {
+                        match stdlib_dir() {
+                            Some(d) => d,
+                            None => {
+                                self.diags.push(Diagnostic::error(imp.span, "Cannot find the Flash standard library folder.").help("Set FLASH_STD to the `stdlib` directory."));
+                                continue;
+                            }
+                        }
+                    } else {
+                        dir.clone()
+                    };
+                    let rel: &[String] = if imp.path[0] == "std" { &imp.path[1..] } else { &imp.path[..] };
+                    if rel.is_empty() {
+                        self.diags.push(Diagnostic::error(imp.span, "Write `import std.name` to import a standard-library module."));
+                        continue;
+                    }
+                    for seg in rel {
+                        file_path.push(seg);
+                    }
+                    file_path.set_extension("flash");
+                    if !file_path.exists() {
+                        self.diags.push(
+                            Diagnostic::error(imp.span, format!("Cannot find the module '{}'.", imp.path.join(".")))
+                                .help(format!("I looked for the file {}.", file_path.display())),
+                        );
+                        continue;
+                    }
+                    if let Some(mi) = self.load(&file_path, alias.clone(), None, Some(imp.span)) {
+                        self.mods[idx].imports.push((alias, mi));
+                    }
+                }
+                Item::UsePlugin(pd) => {
+                    let Some(manifest) = crate::plugins::find_manifest(&pd.name, &dir) else {
+                        let searched: Vec<String> = crate::plugins::search_dirs(&dir).iter().map(|d| d.display().to_string()).collect();
+                        self.diags.push(
+                            Diagnostic::error(pd.span, format!("Cannot find the plugin manifest '{}'.", crate::plugins::manifest_file_name(&pd.name)))
+                                .help(format!("Searched: {}. Set FLASH_PLUGIN_PATH to add folders.", searched.join(", "))),
+                        );
+                        continue;
+                    };
+                    let pi = match self.plugins.iter().position(|p| p.name == pd.name) {
+                        Some(i) => i,
+                        None => match crate::plugins::load_manifest(&manifest, pd.kind) {
+                            Ok(b) => {
+                                self.plugins.push(b);
+                                self.plugins.len() - 1
+                            }
+                            Err(e) => {
+                                self.diags.push(Diagnostic::error(pd.span, e));
+                                continue;
+                            }
+                        },
+                    };
+                    self.mods[idx].plugins.push((pd.name.clone(), pi));
+                    let _ = PluginKind::Rust;
+                }
+                _ => {}
+            }
+        }
+        self.in_progress.pop();
+        Some(idx)
+    }
+}
+
+/// Run all front-end stages. On failure returns the fully rendered diagnostics.
+pub fn frontend(path: &Path, suffix: Option<&str>) -> Result<Frontend, String> {
+    let mut l = Loader {
+        sources: SourceMap::default(),
+        diags: Diagnostics::default(),
+        mods: vec![],
+        by_path: HashMap::new(),
+        plugins: vec![],
+        in_progress: vec![],
+    };
+    let alias = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+    l.load(path, alias, suffix, None);
+    let fail = |l: &Loader| diag::render_all(&l.sources, &l.diags);
+    if l.diags.has_errors() || l.mods.is_empty() {
+        return Err(fail(&l));
+    }
+    crate::resolve::resolve(&l.mods, &l.plugins, &mut l.diags);
+    if l.diags.has_errors() {
+        return Err(fail(&l));
+    }
+    let program = crate::check::check_program(&l.mods, &l.plugins, &mut l.diags);
+    if l.diags.has_errors() {
+        return Err(fail(&l));
+    }
+    let program = program.ok_or_else(|| fail(&l))?;
+    crate::borrowck::check(&program, &mut l.diags);
+    if l.diags.has_errors() {
+        return Err(fail(&l));
+    }
+    // Warnings (if any) are rendered by the caller via the Err path only; keep quiet here.
+    Ok(Frontend { sources: l.sources, program })
+}
+
+pub fn lower_and_optimise(program: &Program, release: bool) -> crate::ir::Module {
+    let mut m = crate::lower::lower(program);
+    crate::opt::optimise(&mut m, release);
+    m
+}
+
+pub fn exe_suffix(target: Option<&str>) -> &'static str {
+    let t = target.map(|t| t.to_string()).unwrap_or_else(|| std::env::consts::OS.to_string());
+    if t.contains("windows") {
+        ".exe"
+    } else {
+        ""
+    }
+}
+
+fn exe_dir() -> Option<PathBuf> {
+    std::env::current_exe().ok().and_then(|e| e.parent().map(|p| p.to_path_buf()))
+}
+
+fn workspace_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
+}
+
+fn runtime_lib_name() -> &'static str {
+    if cfg!(windows) {
+        "flash_rt.lib"
+    } else {
+        "libflash_rt.a"
+    }
+}
+
+/// Locate the runtime static library, building it from source in a development checkout if needed.
+pub fn find_runtime(release: bool) -> Result<PathBuf, String> {
+    if let Some(p) = std::env::var_os("FLASH_RT_LIB") {
+        return Ok(PathBuf::from(p));
+    }
+    let name = runtime_lib_name();
+    let mut candidates = vec![];
+    if let Some(d) = exe_dir() {
+        candidates.push(d.join(name));
+        if let Some(parent) = d.parent() {
+            // tests run from target/debug/deps
+            candidates.push(parent.join(name));
+        }
+    }
+    if let Some(c) = candidates.iter().find(|c| c.is_file()) {
+        return Ok(c.clone());
+    }
+    // Development checkout: build the runtime crate on demand.
+    let root = workspace_root();
+    if root.join("crates/flash-rt/Cargo.toml").is_file() {
+        let mut cmd = Command::new("cargo");
+        cmd.current_dir(&root).args(["build", "-p", "flash-rt", "--quiet"]);
+        if release {
+            cmd.arg("--release");
+        }
+        let status = cmd.status().map_err(|e| format!("cannot run cargo to build the runtime: {}", e))?;
+        if !status.success() {
+            return Err("building the Flash runtime (crates/flash-rt) failed".into());
+        }
+        let target_dir = std::env::var_os("CARGO_TARGET_DIR").map(PathBuf::from).unwrap_or_else(|| root.join("target"));
+        let p = target_dir.join(if release { "release" } else { "debug" }).join(name);
+        if p.is_file() {
+            return Ok(p);
+        }
+    }
+    Err(format!(
+        "cannot find the Flash runtime library '{}'. Run `cargo build --workspace` first, or set FLASH_RT_LIB.",
+        name
+    ))
+}
+
+pub fn link(obj: &Path, out: &Path, opts: &BuildOptions) -> Result<(), String> {
+    let rt = find_runtime(opts.release)?;
+    let cc = std::env::var("FLASH_CC").or_else(|_| std::env::var("CC")).unwrap_or_else(|_| "cc".into());
+    let mut cmd = Command::new(&cc);
+    cmd.arg(obj).arg(&rt).arg("-o").arg(out);
+    if cfg!(target_os = "linux") {
+        cmd.args(["-lpthread", "-ldl", "-lm", "-Wl,--gc-sections"]);
+        if opts.release {
+            cmd.arg("-s");
+        }
+    } else if cfg!(target_os = "macos") {
+        cmd.args(["-lm", "-framework", "Security"]);
+        if opts.release {
+            cmd.arg("-Wl,-dead_strip");
+        }
+    }
+    let output = cmd.output().map_err(|e| format!("cannot run the linker '{}': {} (install a C compiler or set FLASH_CC)", cc, e))?;
+    if !output.status.success() {
+        return Err(format!("linking failed:\n{}", String::from_utf8_lossy(&output.stderr)));
+    }
+    Ok(())
+}
+
+pub fn default_output(src: &Path, opts: &BuildOptions) -> PathBuf {
+    if let Some(o) = &opts.output {
+        return o.clone();
+    }
+    let stem = src.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "a".into());
+    let dir = src.parent().map(|p| p.to_path_buf()).unwrap_or_default();
+    dir.join(format!("{}{}", stem, exe_suffix(opts.target.as_deref())))
+}
+
+pub struct BuildTimings {
+    pub frontend: std::time::Duration,
+    pub backend: std::time::Duration,
+    pub link: std::time::Duration,
+}
+
+/// Compile `src` into a native executable at the returned path.
+pub fn build(src: &Path, opts: &BuildOptions) -> Result<(PathBuf, BuildTimings), String> {
+    let t0 = std::time::Instant::now();
+    let fe = frontend(src, opts.source_suffix.as_deref())?;
+    let module = lower_and_optimise(&fe.program, opts.release);
+    if opts.emit_ir {
+        println!("{}", module);
+    }
+    let t1 = std::time::Instant::now();
+    let obj_bytes = crate::codegen::compile(&module, &crate::codegen::CodegenOptions { release: opts.release, target: opts.target.clone() })?;
+    let t2 = std::time::Instant::now();
+    let out = default_output(src, opts);
+    let obj_path = if opts.emit_obj_only { out.clone() } else { out.with_extension("flash.o") };
+    std::fs::write(&obj_path, &obj_bytes).map_err(|e| format!("cannot write {}: {}", obj_path.display(), e))?;
+    if opts.emit_obj_only {
+        return Ok((obj_path, BuildTimings { frontend: t1 - t0, backend: t2 - t1, link: Default::default() }));
+    }
+    let r = link(&obj_path, &out, opts);
+    let _ = std::fs::remove_file(&obj_path);
+    r?;
+    let t3 = std::time::Instant::now();
+    Ok((out, BuildTimings { frontend: t1 - t0, backend: t2 - t1, link: t3 - t2 }))
+}
+
+/// Type-check only.
+pub fn check(src: &Path) -> Result<(), String> {
+    frontend(src, None).map(|_| ())
+}
