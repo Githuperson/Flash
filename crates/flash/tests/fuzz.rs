@@ -173,7 +173,7 @@ fn program(seed: u64, t: Ity, literal_args: bool) -> (String, Vec<i128>) {
     src.push_str(&format!("fn run(v0: {n}, v1: {n}, v2: {n}):\n"));
     // A typed binding gives literal-only expressions their integer type (otherwise they would be Int).
     for (i, e) in exprs.iter().enumerate() {
-        src.push_str(&format!("    r{i}: {n} = {e}\n    say(r{i})\n", i = i, n = n, e = show(e, _t)));
+        src.push_str(&format!("    r{i}: {n} = {e}\n    say(r{i})\n", i = i, n = n, e = show(e, t)));
     }
     src.push('\n');
     if literal_args {
