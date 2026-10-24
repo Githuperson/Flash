@@ -338,7 +338,9 @@ impl<'a> Lexer<'a> {
                         self.pos += 1;
                     }
                     b'\t' => {
+                        // Reported below; counted as 4 columns so the rest of the file still parses sensibly.
                         saw_tab = true;
+                        width += 4;
                         self.pos += 1;
                     }
                     b'\r' => self.pos += 1,

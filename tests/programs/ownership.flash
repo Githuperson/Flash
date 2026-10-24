@@ -1,0 +1,77 @@
+struct Inventory:
+    items: List[String]
+    owner: String
+
+fn build(own owner: String, n: Int) -> Inventory:
+    items: List[String] = []
+    for i in 0..n:
+        append(items, f"{owner}-item-{i}")
+    return Inventory(items=items, owner=owner)
+
+fn count(inv: Inventory) -> Int:
+    return len(inv.items)
+
+fn add_item(mut inv: Inventory, own item: String):
+    append(inv.items, item)
+
+fn finish(own inv: Inventory) -> String:
+    return inv.owner + " finished with " + str(len(inv.items))
+
+fn first_or(items: List[String], fallback: String) -> String:
+    if len(items) == 0:
+        return copy(fallback)
+    return copy(items[0])
+
+inv = build("alex", 3)
+say(count(inv))
+add_item(inv, "sword")
+add_item(inv, "shield")
+say(count(inv), inv.items[4])
+backup = copy(inv)
+add_item(inv, "extra")
+say(count(inv), count(backup))
+say(first_or(inv.items, "none"))
+empty: List[String] = []
+say(first_or(empty, "none"))
+say(finish(inv))
+
+# nested lists and lists of structs
+grid: List[List[Int]] = []
+for r in 0..3:
+    row: List[Int] = []
+    for c in 0..3:
+        append(row, r * 3 + c)
+    append(grid, row)
+say(grid[2][1], len(grid), len(grid[0]))
+grid[1][1] = 100
+total = 0
+for row in grid:
+    for v in row:
+        total += v
+say(total)
+
+people: List[Inventory] = []
+for i in 0..4:
+    append(people, build("p" + str(i), i))
+n = 0
+for p in people:
+    n += count(p)
+say(n)
+last = pop(people)
+say(last.owner, len(people))
+
+# strings in loops
+s = ""
+for i in 0..5:
+    s = s + str(i)
+    t = s + "!"
+    if i == 3:
+        break
+say(s)
+
+# conditional move
+msg = "moved?"
+if len(s) > 100:
+    other = msg
+    say(other)
+say("done")

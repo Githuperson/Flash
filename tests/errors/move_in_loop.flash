@@ -1,0 +1,5 @@
+fn take(own s: String):
+    say(s)
+s = "x"
+for i in 0..2:
+    take(s)

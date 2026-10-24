@@ -1,0 +1,29 @@
+s = "Hello, Flash"
+say(len(s), upper(s), lower(s))
+say(s + "!" + " " + str(42) + " " + str(2.5) + " " + str(True))
+say(contains(s, "Fla"), starts_with(s, "Hell"), ends_with(s, "sh"), find(s, "Flash"), find(s, "zzz"))
+say(replace(s, "l", "L"))
+say(substr(s, 7, 5), substr(s, 100, 2) == "")
+say(trim("   padded  ") + "|")
+parts = split("a,b,,c", ",")
+say(len(parts), join(parts, "-"))
+for p in parts:
+    say("[" + p + "]")
+name = "Alex"
+age = 11
+say(f"{name} is {age}; next year {age + 1}; {{literal}}")
+say("apple" < "banana", "b" > "a", "abc" == "abc", "abc" != "abd")
+say(byte_at("A", 0))
+r = parse_int("  123 ")
+say(unwrap(r) + 1)
+bad = parse_int("12x")
+say(is_ok(bad), error_message(bad))
+f = parse_float("2.5")
+say(unwrap(f) * 2.0)
+say(unwrap_or(parse_int("nope"), -1))
+tab = "a\tb\\n"
+say(tab)
+print("no newline")
+print(" continues")
+say()
+say("multi", "arg", 1, 2.0, True, None)

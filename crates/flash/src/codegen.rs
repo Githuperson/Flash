@@ -64,11 +64,17 @@ pub fn compile(m: &fir::Module, opts: &CodegenOptions) -> Result<Vec<u8>, String
 
     let sig_of = |params: &[Ty], ret: Option<Ty>| {
         let mut s = ir::Signature::new(call_conv);
+        // Narrow integers are zero-extended at call boundaries, as the C ABIs require
+        // (the Rust runtime and native plugins rely on it).
+        let abi = |t: Ty| match t {
+            Ty::I8 | Ty::I16 => AbiParam::new(clif_ty(t)).uext(),
+            _ => AbiParam::new(clif_ty(t)),
+        };
         for p in params {
-            s.params.push(AbiParam::new(clif_ty(*p)));
+            s.params.push(abi(*p));
         }
         if let Some(r) = ret {
-            s.returns.push(AbiParam::new(clif_ty(r)));
+            s.returns.push(abi(r));
         }
         s
     };
@@ -190,8 +196,14 @@ fn emit_inst(
     let mf = MemFlagsData::trusted();
     match inst {
         Inst::IConst { dst, val } => {
-            let ty = clif_ty(f.vregs[*dst as usize]);
-            d!(dst, b.ins().iconst(ty, *val));
+            let t = f.vregs[*dst as usize];
+            let v = match t {
+                Ty::I8 => *val as i8 as i64,
+                Ty::I16 => *val as i16 as i64,
+                Ty::I32 => *val as i32 as i64,
+                _ => *val,
+            };
+            d!(dst, b.ins().iconst(clif_ty(t), v));
         }
         Inst::FConst { dst, val } => d!(dst, b.ins().f64const(*val)),
         Inst::Copy { dst, src } => {

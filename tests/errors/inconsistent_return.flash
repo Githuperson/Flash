@@ -1,0 +1,5 @@
+fn f(x):
+    if x > 0:
+        return 1
+    return "negative"
+say(f(1))

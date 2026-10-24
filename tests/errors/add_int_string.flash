@@ -1,0 +1,2 @@
+age = 11
+result = age + "hello"

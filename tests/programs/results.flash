@@ -1,0 +1,49 @@
+# Error handling with Result and `?`
+fn parse_pair(a: String, b: String) -> Result[Int]:
+    x = parse_int(a)?
+    y = parse_int(b)?
+    return ok(x + y)
+
+fn safe_div(a: Int, b: Int) -> Result[Int]:
+    if b == 0:
+        return fail("cannot divide by zero")
+    return ok(a / b)
+
+fn describe(a: Int, b: Int) -> String:
+    r = safe_div(a, b)
+    if is_ok(r):
+        return "ok: " + str(unwrap(r))
+    return "error: " + error_message(r)
+
+fn chain(a: Int, b: Int, c: Int) -> Result[Int]:
+    first = safe_div(a, b)?
+    second = safe_div(first, c)?
+    return ok(second)
+
+say(unwrap(parse_pair("20", "22")))
+say(is_ok(parse_pair("20", "x")))
+say(error_message(parse_pair("20", "x")))
+say(describe(10, 2))
+say(describe(1, 0))
+say(unwrap(chain(100, 5, 2)))
+say(error_message(chain(100, 0, 2)))
+say(unwrap_or(chain(1, 0, 1), -1))
+
+name_len = len(unwrap_or(read_file("/definitely/not/here.txt"), "fallback"))
+say(name_len)
+
+# Files: write, append, read back
+path = "/tmp/flash_results_test.txt"
+write_file(path, "line one\n")?
+append_file(path, "line two\n")?
+text = read_file(path)?
+lines = split(trim(text), "\n")
+say(len(lines), lines[1])
+say(file_exists(path))
+remove_file(path)?
+say(file_exists(path))
+say(path_join("a", "b.txt"), path_filename("/x/y/z.tar.gz"), path_parent("/x/y/z.txt"), path_extension("z.txt"))
+
+# `?` at the top level ends the program with an error message and exit code 1
+final = parse_int("not a number")?
+say("unreachable")

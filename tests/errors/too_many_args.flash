@@ -1,0 +1,3 @@
+fn f(a):
+    return a
+say(f(1, 2))

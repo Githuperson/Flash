@@ -1,0 +1,4 @@
+struct P:
+    name: String
+    age: Int
+p = P(name="a")

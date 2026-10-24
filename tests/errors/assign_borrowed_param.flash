@@ -1,0 +1,3 @@
+fn f(s: String):
+    s = "new"
+f("a")

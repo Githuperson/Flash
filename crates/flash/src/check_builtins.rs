@@ -71,7 +71,9 @@ impl<'a> Checker<'a> {
             "int" | "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" => {
                 self.nargs(name, args, 1, span)?;
                 let target = IntTy::from_name(name).unwrap_or(INT);
-                let h = self.expr(args[0], None, Ctx::Borrow)?;
+                // A literal is checked against the target type, so `u64(18446744073709551615)` works.
+                let lit_exp = Type::Int(target);
+                let h = self.expr(args[0], if matches!(args[0].kind, crate::ast::ExprKind::Int(v) if v > i64::MAX as i128) { Some(&lit_exp) } else { None }, Ctx::Borrow)?;
                 if !(h.ty.is_numeric() || h.ty == Type::Bool) {
                     let tn = self.tn(&h.ty);
                     let mut d = Diagnostic::error(args[0].span, format!("Cannot convert {} to {}.", tn, target.name()));
