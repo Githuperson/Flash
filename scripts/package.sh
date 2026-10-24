@@ -8,7 +8,7 @@ cargo build --release -p flash -p flash-rt
 STAGE="$(mktemp -d)"
 mkdir -p "$STAGE/bin" "$STAGE/lib" dist
 cp target/release/flash target/release/flashpkg "$STAGE/bin/"
-cp target/release/libflash_rt.a "$STAGE/lib/"
+cp target/release/libflash_rt.a target/release/flash-stub "$STAGE/lib/"
 cp -R stdlib include "$STAGE/"
 cp LICENSE "$STAGE/"
 tar -C "$STAGE" -czf "dist/flash-$TARGET.tar.gz" .

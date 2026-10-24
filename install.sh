@@ -90,7 +90,7 @@ if [ "$FLASH_PROFILE" = "debug" ]; then FLAG=""; DIR=debug; fi
 TARGET="${CARGO_TARGET_DIR:-$SRC/target}/$DIR"
 mkdir -p "$FLASH_HOME/bin" "$FLASH_HOME/lib"
 cp "$TARGET/flash" "$TARGET/flashpkg" "$FLASH_HOME/bin/"
-cp "$TARGET/libflash_rt.a" "$FLASH_HOME/lib/"
+cp "$TARGET/libflash_rt.a" "$TARGET/flash-stub" "$FLASH_HOME/lib/"
 rm -rf "$FLASH_HOME/stdlib" "$FLASH_HOME/include"
 cp -R "$SRC/stdlib" "$FLASH_HOME/stdlib"
 cp -R "$SRC/include" "$FLASH_HOME/include"

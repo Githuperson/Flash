@@ -141,6 +141,12 @@ Executables are linked with the system C compiler driver (`cc`, override with `F
 (Windows linking is not implemented). The runtime library is found next to the `flash` executable (`target/<profile>/libflash_rt.a`) or built on demand with
 `cargo build -p flash-rt` in a development checkout. The output is a normal native executable: no interpreter, no bytecode, no JIT; plugins are the only run-time dependency and only if the program uses them.
 
+### Built-in linker (Linux x86-64)
+`crates/flash-rt/src/bin/flash-stub.rs` is the runtime as an executable without a program. `driver::link_builtin` writes `[stub][ELF object from Cranelift][len][b"FLASHPAY"]`;
+`flash_rt::loader` finds the payload in `/proc/self/exe`, maps sections (code first, then data and a GOT), builds 16-byte `jmp *` veneers for far runtime calls,
+resolves undefined symbols through `flash_rt::symbols::lookup` (a table of every `fl_*` function; a test checks it covers `rtsigs.rs`), applies `R_X86_64_64/PC32/PLT32/GOTPCREL(X)` relocations, marks the code read+execute and calls `flash_main`.
+Unsupported: other architectures/object formats, `extern fn` libraries, the LLVM backend (all fall back to `cc`).
+
 ## 7. Tooling
 
 * **`flash fmt`** is token based: it re-spaces tokens line by line, normalises indentation, and preserves comments and literals verbatim, so it cannot change the meaning of a program (the tests verify formatting is idempotent and behaviour-preserving over all repository programs).

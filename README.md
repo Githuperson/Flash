@@ -57,7 +57,7 @@ flash --version
 ```
 
 The script downloads the prebuilt archive for your platform (Linux x86-64, macOS Apple Silicon, macOS Intel) from the latest GitHub release, verifies its SHA-256, and unpacks it into `~/.flash`
-(`FLASH_HOME=dir` to change). If no release exists yet it builds from source instead, which needs Rust ([rustup.rs](https://rustup.rs)). Compiling Flash programs always needs a C compiler (`cc`) for linking.
+(`FLASH_HOME=dir` to change). If no release exists yet it builds from source instead, which needs Rust ([rustup.rs](https://rustup.rs)). On Linux x86-64 no C compiler is needed to compile Flash programs (see [Linking without a C compiler](#linking-without-a-c-compiler)); elsewhere `cc` is used for linking.
 `flash` finds its runtime library and standard library relative to its own location, so no environment variables are needed. `./uninstall.sh` removes everything.
 
 * **From a checkout:** `./install.sh` builds from source (`FLASH_FROM_SOURCE=1` forces that for the curl form too).
@@ -139,6 +139,14 @@ say(error_message(geometry.checked_sqrt(-4.0)))  # errors come back as Results
 
 How to write, build (Linux, macOS, Windows) and load plugins, the ownership rules at the boundary, and the trust model: [PLUGIN_ABI.md](PLUGIN_ABI.md).
 **Plugins are native code with full access to your process; the loader prints a warning and the library's SHA-256 each time one is loaded. ABI validation does not make an untrusted plugin safe.**
+
+## Linking without a C compiler
+
+On **Linux x86-64**, `flash build` needs no `cc`, `ld` or libc development files. It writes the executable as the prebuilt `flash-stub` (the Flash runtime) with your program's machine code appended;
+at start-up a small loader in the stub places that code in memory, applies its relocations against the runtime and jumps to it. It is still natively compiled code (nothing is interpreted), builds are faster (no linker run),
+and `--linker builtin|system|auto` chooses explicitly (`auto`, the default, uses the built-in one when it can). Limits: Linux x86-64 and the Cranelift backend only; programs that use `extern fn` / `--link`
+need the system linker; the executable is the stub plus the program, so it is larger than a stripped `cc` build and not stripped; macOS, Windows and AArch64 still use `cc` (a Mach-O/AArch64 loader is not written, and macOS
+additionally has code-signing and executable-memory rules that I could not test). Tests prove a build and run with an empty `PATH`.
 
 ## Static linking
 

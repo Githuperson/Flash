@@ -46,6 +46,18 @@ pub fn clang_available() -> bool {
 }
 
 pub fn build_and_run_with(src: &Path, release: bool, backend: Option<&str>, tag: &str, run_args: &[&str]) -> (Output, Option<Output>) {
+    build_and_run_extra(src, release, backend, &[], tag, run_args)
+}
+
+/// Like `build_and_run_with` with extra `flash build` arguments (for example `--linker system`).
+pub fn build_and_run_extra(
+    src: &Path,
+    release: bool,
+    backend: Option<&str>,
+    extra: &[&str],
+    tag: &str,
+    run_args: &[&str],
+) -> (Output, Option<Output>) {
     let dir = scratch_dir(tag);
     let exe = dir.join(src.file_stem().unwrap());
     let mut args = vec!["build", src.to_str().unwrap(), "-o", exe.to_str().unwrap()];
@@ -56,6 +68,7 @@ pub fn build_and_run_with(src: &Path, release: bool, backend: Option<&str>, tag:
         args.push("--backend");
         args.push(b);
     }
+    args.extend_from_slice(extra);
     let b = flash(&args);
     if !b.status.success() {
         return (b, None);

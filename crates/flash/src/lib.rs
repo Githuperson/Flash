@@ -31,7 +31,7 @@ pub mod parser;
 pub mod pkg;
 pub mod plugins;
 pub mod resolve;
-mod rtsigs;
+pub mod rtsigs;
 pub mod source;
 pub mod types;
 

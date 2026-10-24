@@ -10,8 +10,20 @@ use crate::hir::{PluginBinding, Program};
 use crate::module::LoadedModule;
 use crate::source::{SourceMap, Span};
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Linker {
+    /// Built-in when possible (Linux x86-64, Cranelift, no `--link`/`extern fn`), else the system linker.
+    #[default]
+    Auto,
+    /// Link with `cc` (needs a C compiler/linker).
+    System,
+    /// No external tools: the executable is the prebuilt `flash-stub` with the program appended.
+    Builtin,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct BuildOptions {
+    pub linker: Linker,
     pub release: bool,
     pub target: Option<String>,
     pub output: Option<PathBuf>,
@@ -312,6 +324,76 @@ pub fn find_runtime(release: bool) -> Result<PathBuf, String> {
     Err(format!("cannot find the Flash runtime library '{}'. Run `cargo build --workspace` first, or set FLASH_RT_LIB.", name))
 }
 
+fn stub_name() -> &'static str {
+    if cfg!(windows) {
+        "flash-stub.exe"
+    } else {
+        "flash-stub"
+    }
+}
+
+/// Locate the prebuilt stub executable (next to `flash`, in `../lib`, or built on demand in a dev checkout).
+pub fn find_stub(release: bool) -> Option<PathBuf> {
+    if let Some(p) = std::env::var_os("FLASH_STUB") {
+        return Some(PathBuf::from(p));
+    }
+    let name = stub_name();
+    if let Some(d) = exe_dir() {
+        for c in [d.join(name), d.join("../lib").join(name), d.parent().map(|p| p.join(name)).unwrap_or_default()] {
+            if c.is_file() {
+                return Some(c);
+            }
+        }
+    }
+    let root = workspace_root();
+    if root.join("crates/flash-rt/Cargo.toml").is_file() {
+        let mut cmd = Command::new("cargo");
+        cmd.current_dir(&root).args(["build", "-p", "flash-rt", "--bin", "flash-stub", "--quiet"]);
+        if release {
+            cmd.arg("--release");
+        }
+        if cmd.status().map_or(false, |s| s.success()) {
+            let target_dir = std::env::var_os("CARGO_TARGET_DIR").map(PathBuf::from).unwrap_or_else(|| root.join("target"));
+            let p = target_dir.join(if release { "release" } else { "debug" }).join(name);
+            if p.is_file() {
+                return Some(p);
+            }
+        }
+    }
+    None
+}
+
+/// Can this build use the built-in linker?
+fn builtin_possible(opts: &BuildOptions, program: &Program) -> Result<(), &'static str> {
+    if !(cfg!(all(target_os = "linux", target_arch = "x86_64"))) {
+        return Err("the built-in linker currently supports Linux x86-64 only");
+    }
+    if opts.target.is_some() || opts.backend != crate::codegen::Backend::Cranelift {
+        return Err("the built-in linker needs the Cranelift backend and the host target");
+    }
+    if !opts.link_args.is_empty() || !program.externs.is_empty() {
+        return Err("`extern fn` and --link need the system linker");
+    }
+    Ok(())
+}
+
+/// Write `[stub][object][len][magic]` to `out`.
+fn link_builtin(obj: &[u8], out: &Path, release: bool) -> Result<(), String> {
+    let stub = find_stub(release).ok_or("cannot find flash-stub (run `cargo build --workspace`, or set FLASH_STUB)")?;
+    let mut bytes = std::fs::read(&stub).map_err(|e| format!("cannot read {}: {}", stub.display(), e))?;
+    bytes.extend_from_slice(obj);
+    bytes.extend_from_slice(&(obj.len() as u64).to_le_bytes());
+    bytes.extend_from_slice(b"FLASHPAY");
+    let _ = std::fs::remove_file(out);
+    std::fs::write(out, &bytes).map_err(|e| format!("cannot write {}: {}", out.display(), e))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(out, std::fs::Permissions::from_mode(0o755));
+    }
+    Ok(())
+}
+
 pub fn link(obj: &Path, out: &Path, opts: &BuildOptions) -> Result<(), String> {
     let rt = find_runtime(opts.release)?;
     let cc = std::env::var("FLASH_CC").or_else(|_| std::env::var("CC")).unwrap_or_else(|_| "cc".into());
@@ -462,13 +544,24 @@ pub fn build(src: &Path, opts: &BuildOptions) -> Result<(PathBuf, BuildTimings),
     };
     let t2 = std::time::Instant::now();
     let obj_path = if opts.emit_obj_only { out.clone() } else { out.with_extension("flash.o") };
-    std::fs::write(&obj_path, &obj_bytes).map_err(|e| format!("cannot write {}: {}", obj_path.display(), e))?;
     if opts.emit_obj_only {
+        std::fs::write(&obj_path, &obj_bytes).map_err(|e| format!("cannot write {}: {}", obj_path.display(), e))?;
         return Ok((obj_path, BuildTimings { frontend: t1 - t0, backend: t2 - t1, link: Default::default(), cached: false }));
     }
-    let r = link(&obj_path, &out, opts);
-    let _ = std::fs::remove_file(&obj_path);
-    r?;
+    let use_builtin = match (opts.linker, builtin_possible(opts, &fe.program)) {
+        (Linker::System, _) => false,
+        (Linker::Builtin, Err(why)) => return Err(format!("--linker builtin: {}\n", why)),
+        (Linker::Builtin, Ok(())) => true,
+        (Linker::Auto, r) => r.is_ok() && find_stub(opts.release).is_some(),
+    };
+    if use_builtin {
+        link_builtin(&obj_bytes, &out, opts.release)?;
+    } else {
+        std::fs::write(&obj_path, &obj_bytes).map_err(|e| format!("cannot write {}: {}", obj_path.display(), e))?;
+        let r = link(&obj_path, &out, opts);
+        let _ = std::fs::remove_file(&obj_path);
+        r?;
+    }
     let t3 = std::time::Instant::now();
     if let Some(entry) = &cache_entry {
         // Best effort: a failure to cache never fails the build.

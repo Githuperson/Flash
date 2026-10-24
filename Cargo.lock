@@ -287,7 +287,9 @@ name = "flash-rt"
 version = "0.1.0"
 dependencies = [
  "flash-plugin-sdk",
+ "libc",
  "libloading",
+ "object",
  "sha2",
 ]
 

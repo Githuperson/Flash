@@ -7,7 +7,9 @@
 
 #![allow(clippy::missing_safety_doc)]
 
+pub mod loader;
 mod plugin;
+pub mod symbols;
 
 use std::alloc::{alloc, dealloc, realloc, Layout};
 use std::io::{Read, Write};

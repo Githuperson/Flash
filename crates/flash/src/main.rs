@@ -20,6 +20,7 @@ OPTIONS:
     --target <triple>  Cross-compile (object file only, e.g. aarch64-apple-darwin)
     --emit-ir        Print the intermediate representation
     --link <lib>     Link a native library (.a/.o/.so) for `extern fn` declarations; also -l<name> -L<dir>
+    --linker <l>     `builtin` (no C compiler needed; Linux x86-64), `system` (cc), or `auto` (default: builtin when possible)
     --no-cache       Do not reuse or store executables in the build cache (~/.cache/flash, or $FLASH_CACHE_DIR)
     --backend <b>    Code generator: `cranelift` (default) or `llvm` (needs clang)
     --emit-llvm      Print the LLVM IR instead of building
@@ -69,6 +70,18 @@ fn main() -> ExitCode {
                         return ExitCode::from(2);
                     }
                 }
+            }
+            "--linker" => {
+                i += 1;
+                opts.linker = match rest.get(i).map(|s| s.as_str()) {
+                    Some("auto") => driver::Linker::Auto,
+                    Some("system") => driver::Linker::System,
+                    Some("builtin") => driver::Linker::Builtin,
+                    other => {
+                        eprintln!("--linker must be `auto`, `system` or `builtin` (got {:?})", other);
+                        return ExitCode::from(2);
+                    }
+                };
             }
             "--emit-llvm" => {
                 opts_emit_llvm = true;
