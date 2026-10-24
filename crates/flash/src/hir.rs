@@ -126,6 +126,8 @@ pub enum HKind {
     Call(FuncId, Vec<HExpr>),
     Builtin(Builtin, Vec<HExpr>),
     PluginCall { plugin: usize, func: usize, args: Vec<HExpr> },
+    /// Call of a C-ABI function declared with `extern fn`.
+    ExternCall { index: usize, args: Vec<HExpr> },
     Struct(Vec<HExpr>),
     Field(Box<HExpr>, usize),
     Index(Box<HExpr>, Box<HExpr>),
@@ -191,10 +193,18 @@ pub struct PluginBinding {
     pub funcs: Vec<PluginFunc>,
 }
 
+#[derive(Clone, Debug)]
+pub struct ExternFn {
+    pub name: String,
+    pub params: Vec<(String, Type)>,
+    pub ret: Type,
+}
+
 #[derive(Debug)]
 pub struct Program {
     pub funcs: Vec<HFunc>,
     pub structs: Vec<StructInfo>,
     pub main: FuncId,
     pub plugins: Vec<PluginBinding>,
+    pub externs: Vec<ExternFn>,
 }

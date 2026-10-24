@@ -46,6 +46,7 @@ pub enum Tok {
     Import,
     Mut,
     Own,
+    Extern,
     // punctuation
     LParen,
     RParen,
@@ -124,6 +125,7 @@ impl Tok {
             Tok::Import => "import",
             Tok::Mut => "mut",
             Tok::Own => "own",
+            Tok::Extern => "extern",
             Tok::LParen => "(",
             Tok::RParen => ")",
             Tok::LBracket => "[",
@@ -242,6 +244,7 @@ fn keyword(s: &str) -> Option<Tok> {
         "import" => Tok::Import,
         "mut" => Tok::Mut,
         "own" => Tok::Own,
+        "extern" => Tok::Extern,
         _ => return None,
     })
 }

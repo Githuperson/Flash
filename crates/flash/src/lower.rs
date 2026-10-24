@@ -175,7 +175,7 @@ fn body_mutates(stmts: &[HStmt], xs: LocalId) -> bool {
                 (matches!(b, Builtin::Append | Builtin::Pop) && args.first().and_then(root) == Some(xs)) || args.iter().any(|a| expr(a, xs))
             }
             HKind::Call(_, args) => args.iter().any(|a| root(a) == Some(xs) && !a.ty.is_copy() || expr(a, xs)),
-            HKind::PluginCall { args, .. } | HKind::Struct(args) | HKind::List(args) => args.iter().any(|a| expr(a, xs)),
+            HKind::PluginCall { args, .. } | HKind::ExternCall { args, .. } | HKind::Struct(args) | HKind::List(args) => args.iter().any(|a| expr(a, xs)),
             HKind::Unary(_, a) | HKind::Cast(a) | HKind::Try(a) | HKind::Field(a, _) => expr(a, xs),
             HKind::Binary(_, a, b) | HKind::Logic(_, a, b) | HKind::Index(a, b) => expr(a, xs) || expr(b, xs),
             _ => false,
@@ -213,7 +213,7 @@ fn collect_moves_expr(e: &HExpr, out: &mut HashSet<LocalId>) {
             collect_moves_expr(a, out);
             collect_moves_expr(b, out);
         }
-        HKind::Call(_, args) | HKind::Builtin(_, args) | HKind::Struct(args) | HKind::List(args) | HKind::PluginCall { args, .. } => {
+        HKind::Call(_, args) | HKind::Builtin(_, args) | HKind::Struct(args) | HKind::List(args) | HKind::PluginCall { args, .. } | HKind::ExternCall { args, .. } => {
             for a in args {
                 collect_moves_expr(a, out);
             }
@@ -1108,6 +1108,7 @@ impl<'a, 'p> FnLower<'a, 'p> {
             }
             HKind::Builtin(b, args) => self.builtin(b, args, e),
             HKind::PluginCall { plugin, func, args } => self.plugin_call(*plugin, *func, args, e),
+            HKind::ExternCall { index, args } => self.extern_call(*index, args, e),
             HKind::Try(inner) => self.try_expr(inner, &e.ty),
         }
     }
@@ -1319,6 +1320,55 @@ impl<'a, 'p> FnLower<'a, 'p> {
         let sz = self.iconst(Ty::I64, 24);
         self.rt("fl_free", &[r, sz]);
         v
+    }
+
+    // --------------------------------------------------------------- extern fn
+    /// Call a C-ABI function: integers are widened to 64 bits (sign- or zero-extended per their
+    /// Flash type, which satisfies every C ABI), `Bool` is 0/1, `String` becomes (pointer, length).
+    fn extern_call(&mut self, index: usize, args: &[HExpr], e: &HExpr) -> VReg {
+        let ef = &self.lw.prog.externs[index];
+        let mut cparams: Vec<Ty> = vec![];
+        let mut argv: Vec<VReg> = vec![];
+        for a in args {
+            let v = self.borrow(a);
+            match &a.ty {
+                Type::Int(it) => {
+                    argv.push(self.widen(v, *it));
+                    cparams.push(Ty::I64);
+                }
+                Type::Float => {
+                    argv.push(v);
+                    cparams.push(Ty::F64);
+                }
+                Type::Bool => {
+                    argv.push(self.cast(CastOp::ZExt, v, Ty::I64));
+                    cparams.push(Ty::I64);
+                }
+                Type::Str => {
+                    let sixteen = self.iconst(Ty::I64, 16);
+                    argv.push(self.bin(BinOp::Add, v, sixteen));
+                    let tl = self.tag_len();
+                    argv.push(self.load_t(Ty::I64, v, 0, tl));
+                    cparams.push(Ty::I64);
+                    cparams.push(Ty::I64);
+                }
+                t => unreachable!("extern parameter {:?}", t),
+            }
+        }
+        let ret = if ef.ret == Type::None { None } else { Some(ir_ty(&ef.ret)) };
+        let name = ef.name.clone();
+        let ext = self.lw.m.extern_ref(&name, &cparams, ret);
+        let dst = ret.map(|t| self.vreg(t));
+        self.emit(Inst::Call { dst, callee: Callee::Extern(ext), args: argv });
+        match dst {
+            Some(d) if e.ty == Type::Bool => {
+                // normalise any non-zero C bool to exactly 1
+                let z = self.iconst(Ty::I8, 0);
+                self.cmp(CmpOp::Ne, d, z)
+            }
+            Some(d) => d,
+            None => self.dummy(),
+        }
     }
 
     // --------------------------------------------------------------- plugins

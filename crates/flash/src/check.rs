@@ -55,6 +55,8 @@ pub struct Checker<'a> {
     pub ret_of: Vec<Option<Type>>,
     pub stack: Vec<FnCtx>,
     pub plugins: &'a [PluginBinding],
+    pub externs: Vec<ExternFn>,
+    pub extern_index: HashMap<(usize, String), usize>,
 }
 
 pub fn check_program(mods: &[LoadedModule], plugins: &[PluginBinding], diags: &mut Diagnostics) -> Option<Program> {
@@ -70,6 +72,8 @@ pub fn check_program(mods: &[LoadedModule], plugins: &[PluginBinding], diags: &m
         ret_of: vec![],
         stack: vec![],
         plugins,
+        externs: vec![],
+        extern_index: HashMap::new(),
     };
     c.run()
 }
@@ -166,6 +170,53 @@ impl<'a> Checker<'a> {
             }
         }
 
+        // `extern fn` declarations: only ABI-safe types are allowed.
+        for (mi, m) in self.mods.iter().enumerate() {
+            for it in &m.ast.items {
+                if let Item::ExternFn(f) = it {
+                    let mut params = vec![];
+                    let mut ok = true;
+                    for (pn, te) in &f.params {
+                        match self.resolve_type(te) {
+                            Ok(t) if matches!(t, Type::Int(_) | Type::Float | Type::Bool | Type::Str) => params.push((pn.clone(), t)),
+                            Ok(t) => {
+                                let tn = self.tn(&t);
+                                self.error(
+                                    Diagnostic::error(te.span, format!("An `extern fn` parameter cannot have type {}.", tn))
+                                        .help("C functions can take integers, Float, Bool and String (passed as a pointer and a byte length)."),
+                                );
+                                ok = false;
+                            }
+                            Err(_) => ok = false,
+                        }
+                    }
+                    let ret = match &f.ret {
+                        None => Type::None,
+                        Some(te) => match self.resolve_type(te) {
+                            Ok(t) if matches!(t, Type::Int(_) | Type::Float | Type::Bool | Type::None) => t,
+                            Ok(t) => {
+                                let tn = self.tn(&t);
+                                self.error(
+                                    Diagnostic::error(te.span, format!("An `extern fn` cannot return {}.", tn))
+                                        .help("C functions can return integers, Float, Bool or nothing. Returning strings across the C boundary needs an ownership convention: use a native plugin (see PLUGIN_ABI.md)."),
+                                );
+                                ok = false;
+                                Type::None
+                            }
+                            Err(_) => {
+                                ok = false;
+                                Type::None
+                            }
+                        },
+                    };
+                    if ok {
+                        self.extern_index.insert((mi, f.name.clone()), self.externs.len());
+                        self.externs.push(ExternFn { name: f.name.clone(), params, ret });
+                    }
+                }
+            }
+        }
+
         // Main script.
         let main_id = self.new_func_slot();
         self.stack.push(FnCtx {
@@ -222,7 +273,7 @@ impl<'a> Checker<'a> {
             return None;
         }
         let funcs: Vec<HFunc> = std::mem::take(&mut self.funcs).into_iter().map(|f| f.expect("function was checked")).collect();
-        Some(Program { funcs, structs: std::mem::take(&mut self.structs), main: main_id, plugins: self.plugins.to_vec() })
+        Some(Program { funcs, structs: std::mem::take(&mut self.structs), main: main_id, plugins: self.plugins.to_vec(), externs: std::mem::take(&mut self.externs) })
     }
 
     fn new_func_slot(&mut self) -> FuncId {
@@ -974,6 +1025,9 @@ impl<'a> Checker<'a> {
                     let list: Vec<(Option<&str>, &Expr)> = args.iter().map(|a| (a.name.as_deref(), &a.value)).collect();
                     return self.call_user(fidx, &list, span);
                 }
+                if let Some(&ei) = self.extern_index.get(&(module, n.clone())) {
+                    return self.call_extern(ei, args, span);
+                }
                 if let Some(&sid) = self.struct_ids.get(n) {
                     return self.construct(sid, args, span);
                 }
@@ -995,6 +1049,9 @@ impl<'a> Checker<'a> {
                             if let Some(&fidx) = self.fn_index.get(&(mi, name.clone())) {
                                 let list: Vec<(Option<&str>, &Expr)> = args.iter().map(|a| (a.name.as_deref(), &a.value)).collect();
                                 return self.call_user(fidx, &list, span);
+                            }
+                            if let Some(&ei) = self.extern_index.get(&(mi, name.clone())) {
+                                return self.call_extern(ei, args, span);
                             }
                             return Err(());
                         }
@@ -1152,6 +1209,40 @@ impl<'a> Checker<'a> {
             return Err(());
         }
         Ok(he(HKind::Struct(hs), Type::Struct(sid), span))
+    }
+
+    fn call_extern(&mut self, ei: usize, args: &[Arg], span: Span) -> R<HExpr> {
+        let f = self.externs[ei].clone();
+        let what = format!("The extern function '{}'", f.name);
+        if let Some(a) = args.iter().find(|a| a.name.is_some()) {
+            return self.fail(Diagnostic::error(a.value.span, format!("{} does not take named arguments.", what)));
+        }
+        if args.len() != f.params.len() {
+            return self.fail(Diagnostic::error(
+                span,
+                format!("{} takes {} argument{}, but {} {} given.", what, f.params.len(), if f.params.len() == 1 { "" } else { "s" }, args.len(), if args.len() == 1 { "was" } else { "were" }),
+            ));
+        }
+        let mut hs = vec![];
+        let mut failed = false;
+        for (a, (pn, pt)) in args.iter().zip(f.params.iter()) {
+            match self.expr(&a.value, Some(pt), Ctx::Borrow) {
+                Ok(h) => {
+                    if h.ty != *pt && h.ty != Type::Error {
+                        let what = format!("The argument '{}' of '{}'", pn, f.name);
+                        let _ = self.type_mismatch::<()>(a.value.span, pt, &h, &what);
+                        failed = true;
+                    } else {
+                        hs.push(h)
+                    }
+                }
+                Err(_) => failed = true,
+            }
+        }
+        if failed {
+            return Err(());
+        }
+        Ok(he(HKind::ExternCall { index: ei, args: hs }, f.ret.clone(), span))
     }
 
     fn call_plugin(&mut self, pi: usize, fname: &str, args: &[Arg], span: Span) -> R<HExpr> {

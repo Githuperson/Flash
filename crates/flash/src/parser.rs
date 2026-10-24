@@ -141,6 +141,7 @@ impl<'a> Parser<'a> {
         match self.peek() {
             Tok::Fn => self.fn_def().map(Item::Fn),
             Tok::Struct => self.struct_def().map(Item::Struct),
+            Tok::Extern => self.extern_fn().map(Item::ExternFn),
             Tok::Import => self.import().map(Item::Import),
             Tok::Use => self.use_plugin().map(Item::UsePlugin),
             Tok::Indent => {
@@ -252,6 +253,29 @@ impl<'a> Parser<'a> {
         let header = start.to(self.prev_span());
         let body = self.block("':' after the function header")?;
         Ok(FnDef { name, name_span, params, ret, body, span: header })
+    }
+
+    /// `extern fn name(a: Int, b: String) -> Int`
+    fn extern_fn(&mut self) -> PResult<ExternFnDef> {
+        let start = self.bump().span;
+        self.expect(Tok::Fn, "`fn` after `extern`")?;
+        let (name, name_span) = self.ident("a function name after `extern fn`")?;
+        self.expect(Tok::LParen, "'(' after the function name")?;
+        let mut params = vec![];
+        while !self.at(&Tok::RParen) {
+            let (pname, _) = self.ident("a parameter name")?;
+            self.expect(Tok::Colon, "':' and a type (extern functions need a type for every parameter)")?;
+            let ty = self.type_expr()?;
+            params.push((pname, ty));
+            if !self.eat(&Tok::Comma) {
+                break;
+            }
+        }
+        self.expect(Tok::RParen, "')' to close the parameter list")?;
+        let ret = if self.eat(&Tok::Arrow) { Some(self.type_expr()?) } else { None };
+        let span = start.to(self.prev_span());
+        self.end_of_stmt()?;
+        Ok(ExternFnDef { name, name_span, params, ret, span })
     }
 
     fn struct_def(&mut self) -> PResult<StructDef> {

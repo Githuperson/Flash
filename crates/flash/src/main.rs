@@ -19,6 +19,7 @@ OPTIONS:
     -o <path>        Output file for `build`
     --target <triple>  Cross-compile (object file only, e.g. aarch64-apple-darwin)
     --emit-ir        Print the intermediate representation
+    --link <lib>     Link a native library (.a/.o/.so) for `extern fn` declarations; also -l<name> -L<dir>
     --no-cache       Do not reuse or store executables in the build cache (~/.cache/flash, or $FLASH_CACHE_DIR)
     --backend <b>    Code generator: `cranelift` (default) or `llvm` (needs clang)
     --emit-llvm      Print the LLVM IR instead of building
@@ -48,6 +49,27 @@ fn main() -> ExitCode {
             "--release" => opts.release = true,
             "--emit-ir" => opts.emit_ir = true,
             "--no-cache" => opts.no_cache = true,
+            "--link" => {
+                i += 1;
+                match rest.get(i) {
+                    Some(p) => opts.link_args.push(p.clone()),
+                    None => {
+                        eprintln!("--link needs the path of a library (.a / .o / .so)");
+                        return ExitCode::from(2);
+                    }
+                }
+            }
+            "-l" | "-L" => {
+                let flag = rest[i].clone();
+                i += 1;
+                match rest.get(i) {
+                    Some(v) => opts.link_args.push(format!("{}{}", flag, v)),
+                    None => {
+                        eprintln!("{} needs a value", flag);
+                        return ExitCode::from(2);
+                    }
+                }
+            }
             "--emit-llvm" => {
                 opts_emit_llvm = true;
             }
@@ -77,6 +99,7 @@ fn main() -> ExitCode {
                 prog_args = rest[i + 1..].to_vec();
                 break;
             }
+            a if a.starts_with("-l") || a.starts_with("-L") || a.starts_with("-Wl,") => opts.link_args.push(a.to_string()),
             a if a.starts_with('-') => {
                 eprintln!("Unknown option '{}'. Run `flash --help`.", a);
                 return ExitCode::from(2);

@@ -1,7 +1,7 @@
 target/
 *.o
 *.obj
-/build/
+build/
 /.flash-cache/
 benchmarks/out/
 benchmarks/results_raw.*

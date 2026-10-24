@@ -270,7 +270,7 @@ impl<'a> Ck<'a> {
                     self.expr(a);
                 }
             }
-            HKind::PluginCall { args, .. } => {
+            HKind::PluginCall { args, .. } | HKind::ExternCall { args, .. } => {
                 for a in args {
                     self.expr(a);
                 }

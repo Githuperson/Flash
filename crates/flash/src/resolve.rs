@@ -71,6 +71,15 @@ impl<'a> Resolver<'a> {
                             names.insert(f.name.clone(), f.name_span);
                         }
                     }
+                    Item::ExternFn(f) => {
+                        if names.contains_key(&f.name) || is_builtin(&f.name) {
+                            self.diags.push(Diagnostic::error(f.name_span, format!("The name '{}' is already used by another function.", f.name)));
+                        } else if f.name.starts_with("fl_") || f.name.starts_with("flash_") {
+                            self.diags.push(Diagnostic::error(f.name_span, "Names starting with `fl_` or `flash_` are reserved for the Flash runtime."));
+                        } else {
+                            names.insert(f.name.clone(), f.name_span);
+                        }
+                    }
                     Item::Struct(s) => {
                         if let Some(prev) = self.structs.get(&s.name) {
                             self.diags.push(
@@ -133,6 +142,14 @@ impl<'a> Resolver<'a> {
                     Item::Struct(s) => {
                         for f in &s.fields {
                             self.type_expr(&f.ty);
+                        }
+                    }
+                    Item::ExternFn(f) => {
+                        for (_, t) in &f.params {
+                            self.type_expr(t);
+                        }
+                        if let Some(t) = &f.ret {
+                            self.type_expr(t);
                         }
                     }
                     Item::Stmt(s) => {

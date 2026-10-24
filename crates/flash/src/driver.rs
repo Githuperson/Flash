@@ -23,6 +23,8 @@ pub struct BuildOptions {
     pub source_suffix: Option<String>,
     /// Reuse a previously linked executable when nothing relevant changed (see `cache_key`).
     pub no_cache: bool,
+    /// Extra linker arguments for native libraries (`--link path`, `-l name`, `-L dir`).
+    pub link_args: Vec<String>,
 }
 
 pub struct Frontend {
@@ -319,9 +321,18 @@ pub fn link(obj: &Path, out: &Path, opts: &BuildOptions) -> Result<(), String> {
             cmd.arg("-Wl,-dead_strip");
         }
     }
+    for a in &opts.link_args {
+        cmd.arg(a);
+    }
     let output = cmd.output().map_err(|e| format!("cannot run the linker '{}': {} (install a C compiler or set FLASH_CC)", cc, e))?;
     if !output.status.success() {
-        return Err(format!("linking failed:\n{}", String::from_utf8_lossy(&output.stderr)));
+        let err = String::from_utf8_lossy(&output.stderr);
+        let hint = if err.contains("undefined reference") || err.contains("Undefined symbols") {
+            "\nHint: a function declared with `extern fn` was not found. Pass the library that defines it, for example `--link path/to/libname.a` (or -lname -Ldir), and check the function name.\n"
+        } else {
+            ""
+        };
+        return Err(format!("linking failed:\n{}{}", err, hint));
     }
     Ok(())
 }
@@ -389,7 +400,11 @@ fn cache_key(fe: &Frontend, opts: &BuildOptions) -> String {
         h.update(rt.to_string_lossy().as_bytes());
         h.update(file_stamp(&rt).as_bytes());
     }
-    h.update(format!("{}|{:?}|{:?}|{:?}", opts.release, opts.target, opts.backend, std::env::var("FLASH_CC").ok()).as_bytes());
+    h.update(format!("{}|{:?}|{:?}|{:?}|{:?}", opts.release, opts.target, opts.backend, std::env::var("FLASH_CC").ok(), opts.link_args).as_bytes());
+    for a in &opts.link_args {
+        // linked archives may change without their path changing
+        h.update(file_stamp(Path::new(a)).as_bytes());
+    }
     for f in &fe.sources.files {
         h.update(f.display.as_bytes());
         h.update((f.text.len() as u64).to_le_bytes());

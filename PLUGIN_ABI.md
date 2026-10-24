@@ -279,9 +279,12 @@ cl /nologo /std:c++17 /O2 /EHsc /LD /I include plugins\cpp\geometry\geometry.cpp
 
 Use `-fvisibility=hidden` (or `/EHsc` with `FLASH_EXPORT` on the entry point) so only `flash_plugin_entry_v1` is exported.
 
-## 12. Static linking (not implemented)
+## 12. Static linking
 
-The task brief asks for static *and* dynamic native interop. v0.1 implements **dynamic plugins only**. The design for static linking is: a manifest with
-`link = "static"` and a path to a `.a`/`.lib` that exports the same `flash_plugin_entry_v1` (renamed per plugin with a prefix to avoid symbol clashes);
-the compiler would pass the archive to the linker and the runtime would call the entry point directly instead of `dlopen`. Until that exists, the
-`flash` linker invocation cannot link user libraries.
+Two mechanisms exist:
+
+1. **`extern fn` + `--link`** (implemented): C-ABI functions declared in Flash source and linked into the executable at build time — see
+   [LANGUAGE_SPEC.md "Statically linked native libraries"](LANGUAGE_SPEC.md#statically-linked-native-libraries-extern-fn) and `examples/static_link/` (a C library, a C++ library behind `extern "C"` and a `#![no_std]` Rust static library).
+   Types are limited to integers, `Float`, `Bool` and borrowed `String` arguments; there are no manifests, no validation (the linker only checks that the symbol exists), and no isolation.
+2. **Statically linked plugins** (not implemented): linking a plugin that exports the full `flash_plugin_entry_v1` table (with manifests, signature checks, strings and `Result` conversion) so that the plugin does not have to be a separate file.
+   The design is a manifest option `link = "static"` that renames the entry point per plugin to avoid symbol clashes and makes the runtime call it directly instead of `dlopen`.

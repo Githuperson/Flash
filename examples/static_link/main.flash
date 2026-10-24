@@ -1,0 +1,22 @@
+# Static linking: C and C++ functions declared with `extern fn` and linked into the executable.
+#   make -C examples/static_link
+#   flash run examples/static_link/main.flash --link examples/static_link/build/libmathlib.a \
+#       --link examples/static_link/build/libstats.a -lstdc++
+extern fn c_gcd(a: Int, b: Int) -> Int
+extern fn c_hypot(x: Float, y: Float) -> Float
+extern fn c_count_byte(text: String, needle: u8) -> u64
+extern fn c_sign(x: i32) -> i32
+extern fn c_is_even(n: Int) -> Bool
+extern fn c_bump(by: Int)
+extern fn c_counter() -> Int
+extern fn cpp_mean3(a: Float, b: Float, c: Float) -> Float
+
+say(c_gcd(84, 36), c_gcd(-12, 18))
+say(c_hypot(3.0, 4.0))
+say(c_count_byte("banana", 97), c_count_byte("", 97))
+say(c_sign(-5), c_sign(0), c_sign(9))
+say(c_is_even(10), c_is_even(7))
+c_bump(5)
+c_bump(37)
+say(c_counter())
+say(cpp_mean3(1.0, 2.0, 6.0))

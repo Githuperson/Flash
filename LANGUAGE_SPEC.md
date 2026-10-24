@@ -51,7 +51,7 @@ program parses cleanly, and ownership errors only when it type-checks.
 | `True`, `False` | `Bool` | |
 | `None` | `None` | the empty value |
 
-Keywords: `fn struct if elif else while for in return break continue pass and or not True False None use import mut own`.
+Keywords: `fn struct if elif else while for in return break continue pass and or not True False None use import mut own extern`.
 
 ---
 
@@ -86,7 +86,8 @@ c = i32(b) + 1            # explicit widening
 * Conversion functions: `int(x)` (= `i64`), `i8(x) … u64(x)`, `float(x)`; each accepts any integer type, `Float`
   or (for integer targets) `Bool`.
 * **Integer literals adapt** to the integer type expected by context: `a: u8 = 200`, `a + 55`, `f(3)` where the parameter is
-  `u8`. A literal that does not fit is an error: `The number 300 does not fit in u8.`
+  `u8`. A *constant expression made only of literals* (`7`, `-1`, `~0`, `(1 + 2) * 3`) has no type of its own and adapts the same way;
+  with no context at all (for example `say(1 + 2)`, or comparing two constant expressions) it is an `Int`. A literal that does not fit is an error: `The number 300 does not fit in u8.`
 * `Float` -> integer conversion: `NaN` becomes 0, out-of-range values saturate to the minimum/maximum.
 
 ### Integer overflow
@@ -430,6 +431,28 @@ r = fast_math.checked_div(1, 0)         # fallible functions return Result[T]
 
 ---
 
+### Statically linked native libraries: `extern fn`
+
+For plain C-ABI functions that you link into the executable (no manifest, no `dlopen`):
+
+```
+extern fn c_gcd(a: Int, b: Int) -> Int
+extern fn c_count_byte(text: String, needle: u8) -> u64     # String = (pointer, byte length)
+extern fn c_is_even(n: Int) -> Bool
+
+say(c_gcd(84, 36))
+```
+
+```bash
+flash run main.flash --link build/libmathlib.a -lstdc++     # --link <file>, -l<name>, -L<dir>, -Wl,<linker option>
+```
+
+* The declaration names the C symbol exactly and states its signature; **Flash cannot verify that the library really has that signature** — a wrong declaration is as unsafe as in any FFI. This is why the declaration is the trust point; there is no `unsafe` keyword yet.
+* Parameters: integers (any width), `Float`, `Bool`, `String`. Integers are passed widened to 64 bits (sign- or zero-extended according to their Flash type), `Bool` as 0/1, a `String` as two arguments `(const uint8_t* ptr, uint64_t len)` that the C code may only read during the call and must not keep or free.
+  Return types: integers, `Float`, `Bool` or nothing. Strings, lists and structs cannot cross this simple boundary (ownership conventions are what the plugin ABI is for).
+* C++ code must be exposed through `extern "C"` functions and must not let exceptions escape; Rust libraries should be `#![no_std]` `staticlib`s (see `examples/static_link/rust_static.rs`) or, better, plugins.
+* Names starting with `fl_` or `flash_` are reserved for the runtime. A missing symbol is reported by the linker with a hint.
+
 ## 13. Built-in functions
 
 `T` stands for any printable type; "borrows" means the argument is not consumed.
@@ -484,7 +507,8 @@ Compiler diagnostics always exit with code 1 (`flash check/build/run`); usage er
 
 ```
 file        = { item NEWLINE* } ;
-item        = fn_def | struct_def | import | use_plugin | statement ;
+item        = fn_def | extern_fn | struct_def | import | use_plugin | statement ;
+extern_fn   = "extern" "fn" NAME "(" [ NAME ":" type { "," NAME ":" type } ] ")" [ "->" type ] ;
 fn_def      = "fn" NAME "(" [ param { "," param } ] ")" [ "->" type ] block ;
 param       = [ "mut" | "own" ] NAME [ ":" type ] ;
 struct_def  = "struct" NAME ":" NEWLINE INDENT { NAME ":" type NEWLINE } DEDENT ;
@@ -521,6 +545,6 @@ These are part of the design direction but **do not exist** in v0.1; the compile
 * threads, async, channels (so no data-race story beyond "there is no concurrency");
 * `unsafe` blocks and raw pointers;
 * reference locals (`b = bodies[i]` is rejected because it would move an element out; index each time or use `for`);
-* statically linking native libraries (only dynamic plugins are implemented);
+* statically linking of anything other than C-ABI `extern fn` functions (no automatic bindings, no strings/structs across `extern fn`);
 * arbitrary-precision or overflow-checked integers; an interpreter or REPL;
 * editor/LSP support; an online package registry.

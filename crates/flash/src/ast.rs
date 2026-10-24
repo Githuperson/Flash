@@ -12,6 +12,8 @@ pub struct Module {
 pub enum Item {
     Fn(FnDef),
     Struct(StructDef),
+    /// `extern fn name(a: Int) -> Int` — a C-ABI function provided by a linked library.
+    ExternFn(ExternFnDef),
     /// `import name` — another Flash source file.
     Import(ImportDecl),
     /// `use rust_plugin "name"` / `use cpp_plugin "name"`.
@@ -63,6 +65,15 @@ pub struct FnDef {
     pub params: Vec<Param>,
     pub ret: Option<TypeExpr>,
     pub body: Vec<Stmt>,
+    pub span: Span,
+}
+
+#[derive(Clone, Debug)]
+pub struct ExternFnDef {
+    pub name: String,
+    pub name_span: Span,
+    pub params: Vec<(String, TypeExpr)>,
+    pub ret: Option<TypeExpr>,
     pub span: Span,
 }
 
