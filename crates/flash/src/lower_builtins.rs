@@ -22,8 +22,74 @@ impl<'a, 'p> FnLower<'a, 'p> {
             Type::None => {
                 self.rt("fl_print_none", &[]);
             }
+            Type::List(et) => self.print_list(v, et),
             t => unreachable!("print {:?}", t),
         }
+    }
+
+    /// Print `[a, b, c]` (strings are quoted) by looping over the elements.
+    fn print_list(&mut self, list: VReg, et: &Type) {
+        let open = self.lw.string_data("[");
+        let close = self.lw.string_data("]");
+        let sep = self.lw.string_data(", ");
+        let quote = self.lw.string_data("\"");
+        let lit = |s: &mut Self, d: DataId| {
+            let p = s.vreg(Ty::I64);
+            s.emit(Inst::DataAddr { dst: p, data: d });
+            s.rt("fl_print_str", &[p]);
+        };
+        lit(self, open);
+        let n = self.load(Ty::I64, list, 0);
+        let idx = self.iconst(Ty::I64, 0);
+        let head = self.new_block();
+        let body = self.new_block();
+        let exit = self.new_block();
+        self.jump_to(head);
+        self.switch(head);
+        let c = self.cmp(CmpOp::SLt, idx, n);
+        self.branch(c, body, exit);
+        self.switch(body);
+        let zero = self.iconst(Ty::I64, 0);
+        let first = self.cmp(CmpOp::Eq, idx, zero);
+        let not_first = self.new_block();
+        let after_sep = self.new_block();
+        self.branch(first, after_sep, not_first);
+        self.switch(not_first);
+        lit(self, sep);
+        self.jump_to(after_sep);
+        self.switch(after_sep);
+        let data = self.load(Ty::I64, list, 16);
+        let stride = self.iconst(Ty::I64, Self::stride(et));
+        let off = self.bin(BinOp::Mul, idx, stride);
+        let addr = self.bin(BinOp::Add, data, off);
+        let ev = self.load(ir_ty(et), addr, 0);
+        match et {
+            Type::Int(it) => {
+                let w = self.widen(ev, *it);
+                self.rt(if it.signed { "fl_print_int" } else { "fl_print_uint" }, &[w]);
+            }
+            Type::Float => {
+                self.rt("fl_print_float", &[ev]);
+            }
+            Type::Bool => {
+                self.rt("fl_print_bool", &[ev]);
+            }
+            Type::Str => {
+                lit(self, quote);
+                self.rt("fl_print_str", &[ev]);
+                lit(self, quote);
+            }
+            Type::List(inner) => self.print_list(ev, inner),
+            _ => {
+                self.rt("fl_print_none", &[]);
+            }
+        }
+        let one = self.iconst(Ty::I64, 1);
+        let next = self.bin(BinOp::Add, idx, one);
+        self.copy(idx, next);
+        self.jump_to(head);
+        self.switch(exit);
+        lit(self, close);
     }
 
     pub(super) fn builtin(&mut self, b: &Builtin, args: &[HExpr], e: &HExpr) -> VReg {

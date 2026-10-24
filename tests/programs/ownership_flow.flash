@@ -1,0 +1,77 @@
+# Early exits (return / break / continue / ?) must release every owned value exactly once.
+# The test harness runs this with the allocation counter and requires zero live allocations.
+
+fn early(n: Int) -> String:
+    a = "a" + str(n)
+    b = "b" + str(n)
+    if n == 0:
+        return a
+    for i in 0..n:
+        c = a + str(i)
+        if i == 1:
+            continue
+        if i == 3:
+            return c
+    return b
+
+fn fallible(n: Int) -> Result[String]:
+    tmp = "tmp" + str(n)
+    items = [tmp + "1", tmp + "2"]
+    v = parse_int(str(n))?
+    if v > 5:
+        return fail("too big: " + tmp)
+    w = parse_int(items[0])?
+    return ok(tmp)
+
+fn nested(n: Int) -> Int:
+    total = 0
+    for i in 0..n:
+        row = [str(i), str(i * 2)]
+        for s in row:
+            t = s + "!"
+            if len(t) > 3:
+                break
+            total += len(t)
+        if i == 4:
+            break
+    return total
+
+fn consume_all(own xs: List[String]) -> Int:
+    n = 0
+    for x in xs:
+        n += len(x)
+    return n
+
+fn pass_through(own s: String) -> String:
+    return s
+
+for k in 0..6:
+    say(early(k))
+say(early(10))
+say(is_ok(fallible(1)), error_message(fallible(1)))
+say(error_message(fallible(9)))
+say(nested(10))
+
+words = split("the quick brown fox", " ")
+say(consume_all(words))
+s = pass_through("moved through")
+say(s)
+
+keep: List[String] = []
+for i in 0..20:
+    label = "item" + str(i)
+    if i % 2 == 0:
+        append(keep, label)
+say(len(keep), keep[9])
+while len(keep) > 3:
+    last = pop(keep)
+    if len(last) > 6:
+        continue
+say(keep)
+
+r = parse_int("12")
+if is_ok(r):
+    v = unwrap(r)
+    say(v)
+r2 = parse_int("x")
+say(unwrap_or(r2, 0))

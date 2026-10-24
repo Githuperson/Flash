@@ -38,7 +38,7 @@ macro_rules! programs {
 
 mod tests_dir {
     use super::*;
-    programs!("tests/programs": integers, strings, scopes, results, ownership, generics);
+    programs!("tests/programs": integers, strings, scopes, results, ownership, ownership_flow, generics, modules);
 }
 
 mod examples_dir {

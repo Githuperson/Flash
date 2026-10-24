@@ -37,13 +37,20 @@ impl<'a> Checker<'a> {
     }
 
     fn printable(&mut self, name: &str, h: &HExpr, span: Span) -> R<()> {
-        match h.ty {
-            Type::Int(_) | Type::Float | Type::Bool | Type::Str | Type::None => Ok(()),
+        fn ok(t: &Type) -> bool {
+            match t {
+                Type::Int(_) | Type::Float | Type::Bool | Type::Str | Type::None => true,
+                Type::List(e) => ok(e),
+                _ => false,
+            }
+        }
+        match &h.ty {
+            t if ok(t) && (name != "str" || !matches!(t, Type::List(_))) => Ok(()),
             _ => {
                 let tn = self.tn(&h.ty);
                 self.fail(
                     Diagnostic::error(span, format!("{}() cannot print a value of type {}.", name, tn))
-                        .help("Print numbers, Bool, String and None directly; for lists use `for x in items: say(x)` or `join(items, \", \")`."),
+                        .help("say() prints numbers, Bool, String, None and lists of those. For a struct, print its fields: `say(p.name)`."),
                 )
             }
         }

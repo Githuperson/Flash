@@ -68,7 +68,7 @@ impl Loader {
             }
             return None;
         }
-        let mut text = match std::fs::read_to_string(path) {
+        let text = match std::fs::read_to_string(path) {
             Ok(t) => t,
             Err(e) => {
                 let msg = format!("cannot read '{}': {}", path.display(), e);
@@ -79,6 +79,11 @@ impl Loader {
                 return None;
             }
         };
+        self.load_text(path, text, alias, suffix)
+    }
+
+    fn load_text(&mut self, path: &Path, mut text: String, alias: String, suffix: Option<&str>) -> Option<usize> {
+        let canon = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
         if let Some(s) = suffix {
             text.push('\n');
             text.push_str(s);
@@ -175,6 +180,16 @@ impl Loader {
 
 /// Run all front-end stages. On failure returns the fully rendered diagnostics.
 pub fn frontend(path: &Path, suffix: Option<&str>) -> Result<Frontend, String> {
+    frontend_impl(path, None, suffix)
+}
+
+/// Front end for source text that is not stored in a file (used by tests and tools).
+/// `name` is shown in diagnostics; imports resolve relative to the current directory.
+pub fn frontend_from_source(name: &str, text: &str) -> Result<Frontend, String> {
+    frontend_impl(Path::new(name), Some(text.to_string()), None)
+}
+
+fn frontend_impl(path: &Path, text: Option<String>, suffix: Option<&str>) -> Result<Frontend, String> {
     let mut l = Loader {
         sources: SourceMap::default(),
         diags: Diagnostics::default(),
@@ -184,7 +199,14 @@ pub fn frontend(path: &Path, suffix: Option<&str>) -> Result<Frontend, String> {
         in_progress: vec![],
     };
     let alias = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
-    l.load(path, alias, suffix, None);
+    match text {
+        Some(t) => {
+            l.load_text(path, t, alias, suffix);
+        }
+        None => {
+            l.load(path, alias, suffix, None);
+        }
+    }
     let fail = |l: &Loader| diag::render_all(&l.sources, &l.diags);
     if l.diags.has_errors() || l.mods.is_empty() {
         return Err(fail(&l));
