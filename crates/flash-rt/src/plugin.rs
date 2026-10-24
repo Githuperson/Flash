@@ -68,7 +68,15 @@ fn search_dirs(manifest_dir: &str) -> Vec<PathBuf> {
             v.push(d.join("plugins"));
         }
     }
-    v.push(PathBuf::from(manifest_dir));
+    // Development-tree conveniences: next to the manifest, its build/ folder, and the Cargo target
+    // directories of enclosing workspaces.
+    let md = PathBuf::from(manifest_dir);
+    v.push(md.clone());
+    v.push(md.join("build"));
+    for anc in md.ancestors().take(5) {
+        v.push(anc.join("target").join("release"));
+        v.push(anc.join("target").join("debug"));
+    }
     v
 }
 

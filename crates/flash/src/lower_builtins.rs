@@ -142,11 +142,12 @@ impl<'a, 'p> FnLower<'a, 'p> {
             }
             B::Assert => {
                 let c = self.expr(&args[0]);
+                // Evaluate the message before branching so its temporary is defined on every path.
+                let msg = if args.len() > 1 { self.borrow(&args[1]) } else { self.iconst(Ty::I64, 0) };
                 let fail = self.new_block();
                 let ok = self.new_block();
                 self.branch(c, ok, fail);
                 self.switch(fail);
-                let msg = if args.len() > 1 { self.borrow(&args[1]) } else { self.iconst(Ty::I64, 0) };
                 self.rt("fl_assert_fail", &[msg]);
                 self.term(Term::Unreachable);
                 self.switch(ok);

@@ -854,7 +854,7 @@ impl<'a, 'p> FnLower<'a, 'p> {
     /// Evaluate an operand that is only read; owned temporaries are released at statement end.
     fn borrow(&mut self, e: &HExpr) -> VReg {
         let v = self.expr(e);
-        if e.ty.is_owned() && !crate::check::is_place(e) {
+        if e.ty.is_owned() && !crate::check::is_place(e) && !matches!(e.kind, HKind::Str(_)) {
             if let Some(t) = self.temps.last_mut() {
                 t.push((v, e.ty.clone()));
             }

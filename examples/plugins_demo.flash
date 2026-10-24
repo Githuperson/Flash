@@ -1,0 +1,37 @@
+# Calls a Rust plugin and a C++ plugin through the Flash plugin ABI.
+# Build the plugins first (see README.md):  cargo build -p fast_math && make -C plugins/cpp/geometry
+use rust_plugin "fast_math"
+use cpp_plugin "geometry"
+
+# --- Rust plugin ---
+sum = fast_math.add(40, 2)
+say("fast_math.add(40, 2) =", sum)
+assert(sum == 42, "Rust add returned the wrong value")
+say("fast_math.square(1.5) =", fast_math.square(1.5))
+say("fast_math.gcd(84, 36) =", fast_math.gcd(84, 36))
+say("fast_math.is_prime(97) =", fast_math.is_prime(97), "is_prime(91) =", fast_math.is_prime(91))
+say(fast_math.shout("flash"))
+
+# --- C++ plugin ---
+d = geometry.distance(0.0, 0.0, 3.0, 4.0)
+say("geometry.distance =", d)
+assert(d == 5.0, "C++ distance returned the wrong value")
+say("geometry.clamp(15, 0, 10) =", geometry.clamp(15, 0, 10))
+say(geometry.describe("My App"))
+
+# --- a C++ class behind an opaque handle ---
+counter = geometry.counter_new(100)
+geometry.counter_add(counter, 5)
+geometry.counter_add(counter, 7)
+say("counter =", geometry.counter_value(counter))
+geometry.counter_free(counter)
+
+# --- errors cross the boundary as Results ---
+say(unwrap(fast_math.checked_div(84, 2)))
+r = fast_math.checked_div(1, 0)
+say(is_ok(r), error_message(r))
+say(error_message(geometry.checked_sqrt(-4.0)))
+say(unwrap(geometry.checked_sqrt(16.0)))
+# panics and exceptions inside plugins never unwind into Flash
+say(error_message(fast_math.always_panics()))
+say(error_message(geometry.always_throws()))

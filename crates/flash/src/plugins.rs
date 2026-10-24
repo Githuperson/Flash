@@ -43,16 +43,37 @@ pub fn manifest_file_name(name: &str) -> String {
     format!("{}.flashplugin.toml", name)
 }
 
-/// Directories searched for plugin manifests, in order.
+/// Directories searched for plugin manifests, in order. `plugins/` folders are searched up to
+/// two levels deep (so `plugins/rust/fast_math/` is found from the repository root).
 pub fn search_dirs(source_dir: &Path) -> Vec<PathBuf> {
-    let mut dirs = vec![source_dir.to_path_buf(), source_dir.join("plugins")];
+    let mut bases = vec![source_dir.to_path_buf()];
     if let Ok(cwd) = std::env::current_dir() {
-        dirs.push(cwd.clone());
-        dirs.push(cwd.join("plugins"));
+        bases.push(cwd);
+    }
+    let mut dirs: Vec<PathBuf> = vec![];
+    for b in &bases {
+        dirs.push(b.clone());
+        let p = b.join("plugins");
+        dirs.push(p.clone());
+        if let Ok(rd) = std::fs::read_dir(&p) {
+            for e in rd.flatten() {
+                if e.path().is_dir() {
+                    dirs.push(e.path());
+                    if let Ok(rd2) = std::fs::read_dir(e.path()) {
+                        for e2 in rd2.flatten() {
+                            if e2.path().is_dir() {
+                                dirs.push(e2.path());
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
     if let Some(p) = std::env::var_os("FLASH_PLUGIN_PATH") {
         dirs.extend(std::env::split_paths(&p));
     }
+    dirs.dedup();
     dirs
 }
 

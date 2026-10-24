@@ -1,0 +1,57 @@
+# Manifest for the C++ example plugin (format documented in PLUGIN_ABI.md).
+[plugin]
+name = "geometry"
+kind = "cpp"
+abi_version = 1
+version = "0.1.0"
+library = "geometry"        # libgeometry.so / libgeometry.dylib / geometry.dll
+
+[[function]]
+name = "distance"
+params = ["Float", "Float", "Float", "Float"]
+returns = "Float"
+
+[[function]]
+name = "circle_area"
+params = ["Float"]
+returns = "Float"
+
+[[function]]
+name = "clamp"
+params = ["Int", "Int", "Int"]
+returns = "Int"
+
+[[function]]
+name = "describe"
+params = ["String"]
+returns = "String"
+
+[[function]]
+name = "checked_sqrt"
+params = ["Float"]
+returns = "Float"
+fallible = true
+
+[[function]]
+name = "always_throws"
+returns = "Int"
+fallible = true
+
+# An opaque handle to a C++ `Counter` object is a u64 on the Flash side.
+[[function]]
+name = "counter_new"
+params = ["Int"]
+returns = "u64"
+
+[[function]]
+name = "counter_add"
+params = ["u64", "Int"]
+
+[[function]]
+name = "counter_value"
+params = ["u64"]
+returns = "Int"
+
+[[function]]
+name = "counter_free"
+params = ["u64"]
