@@ -48,6 +48,25 @@ for i in 0..3:                  # 0, 1, 2   (the upper bound is excluded; use 0.
 Tuples, maps, user generics/traits, methods, closures, threads, `unsafe`, strings/structs across `extern fn`, process-isolated plugins, per-module incremental compilation (only whole-program caching exists), an LSP server,
 a package registry, Windows linking. The full list is in [LANGUAGE_SPEC.md §16](LANGUAGE_SPEC.md#16-not-implemented-yet) and [ARCHITECTURE.md §9](ARCHITECTURE.md#9-known-limitations--roadmap).
 
+## Install
+
+Like `rustup`, but it builds from source (there are no prebuilt binaries yet). You need Rust ([rustup.rs](https://rustup.rs)) and a C compiler (`cc`).
+
+```bash
+./install.sh                       # from a checkout; installs to ~/.flash (override with FLASH_HOME=dir)
+export PATH="$HOME/.flash/bin:$PATH"   # add to ~/.zshrc or ~/.bashrc
+flash --version
+```
+
+Or in one line, once this code is on the repository's `main` branch (until then use `FLASH_REF=<branch>`):
+
+```bash
+curl -sSf https://raw.githubusercontent.com/Githuperson/Flash/main/install.sh | sh
+```
+
+This installs `flash`, `flashpkg`, the runtime library (`lib/libflash_rt.a`), the standard library and the plugin headers; `flash` finds them relative to its own location, so no environment variables are needed.
+`./uninstall.sh` removes everything. The plugin examples are not installed; build them from a checkout (below).
+
 ## Build
 
 Requirements: a Rust toolchain (tested with 1.97; any recent stable should work) and a C compiler/linker reachable as `cc`. Optional: `clang` for `--backend llvm`, `c++`/`make` for the C++ plugin, Python 3 for the benchmarks.
