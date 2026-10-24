@@ -49,8 +49,9 @@ impl<'a> Checker<'a> {
             _ => {
                 let tn = self.tn(&h.ty);
                 self.fail(
-                    Diagnostic::error(span, format!("{}() cannot print a value of type {}.", name, tn))
-                        .help("say() prints numbers, Bool, String, None and lists of those. For a struct, print its fields: `say(p.name)`."),
+                    Diagnostic::error(span, format!("{}() cannot print a value of type {}.", name, tn)).help(
+                        "say() prints numbers, Bool, String, None and lists of those. For a struct, print its fields: `say(p.name)`.",
+                    ),
                 )
             }
         }
@@ -80,7 +81,11 @@ impl<'a> Checker<'a> {
                 let target = IntTy::from_name(name).unwrap_or(INT);
                 // A literal is checked against the target type, so `u64(18446744073709551615)` works.
                 let lit_exp = Type::Int(target);
-                let h = self.expr(args[0], if matches!(args[0].kind, crate::ast::ExprKind::Int(v) if v > i64::MAX as i128) { Some(&lit_exp) } else { None }, Ctx::Borrow)?;
+                let h = self.expr(
+                    args[0],
+                    if matches!(args[0].kind, crate::ast::ExprKind::Int(v) if v > i64::MAX as i128) { Some(&lit_exp) } else { None },
+                    Ctx::Borrow,
+                )?;
                 if !(h.ty.is_numeric() || h.ty == Type::Bool) {
                     let tn = self.tn(&h.ty);
                     let mut d = Diagnostic::error(args[0].span, format!("Cannot convert {} to {}.", tn, target.name()));
@@ -143,10 +148,14 @@ impl<'a> Checker<'a> {
             "fill" => {
                 self.nargs(name, args, 2, span)?;
                 let n = self.arg_of(args[0], &Type::Int(INT), name, "The length", Ctx::Borrow)?;
-                let v = self.expr(args[1], match expected {
-                    Some(Type::List(t)) => Some(&**t),
-                    _ => None,
-                }, Ctx::Borrow)?;
+                let v = self.expr(
+                    args[1],
+                    match expected {
+                        Some(Type::List(t)) => Some(&**t),
+                        _ => None,
+                    },
+                    Ctx::Borrow,
+                )?;
                 if !v.ty.is_copy() {
                     let tn = self.tn(&v.ty);
                     return self.fail(
@@ -162,7 +171,8 @@ impl<'a> Checker<'a> {
                 let h = self.expr(args[0], expected, Ctx::Borrow)?;
                 if !(h.ty == Type::Float || matches!(h.ty, Type::Int(i) if i.signed)) {
                     let tn = self.tn(&h.ty);
-                    return self.fail(Diagnostic::error(args[0].span, format!("abs() needs a signed integer or Float, but this is {}.", tn)));
+                    return self
+                        .fail(Diagnostic::error(args[0].span, format!("abs() needs a signed integer or Float, but this is {}.", tn)));
                 }
                 let ty = h.ty.clone();
                 Ok(self.mk(B::Abs, vec![h], ty, span))
@@ -180,7 +190,10 @@ impl<'a> Checker<'a> {
                 };
                 if !a.ty.is_numeric() || a.ty != b.ty {
                     let (x, y) = (self.tn(&a.ty), self.tn(&b.ty));
-                    return self.fail(Diagnostic::error(span, format!("{}() needs two numbers of the same type, but these are {} and {}.", name, x, y)));
+                    return self.fail(Diagnostic::error(
+                        span,
+                        format!("{}() needs two numbers of the same type, but these are {} and {}.", name, x, y),
+                    ));
                 }
                 let ty = a.ty.clone();
                 Ok(self.mk(if name == "min" { B::Min } else { B::Max }, vec![a, b], ty, span))

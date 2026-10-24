@@ -186,36 +186,14 @@ pub struct Lexer<'a> {
 }
 
 pub fn lex(src: &str, file: u32, diags: &mut Diagnostics) -> Vec<Token> {
-    let mut lx = Lexer {
-        src,
-        bytes: src.as_bytes(),
-        pos: 0,
-        file,
-        base: 0,
-        inline: false,
-        indents: vec![0],
-        depth: 0,
-        out: vec![],
-        diags,
-    };
+    let mut lx = Lexer { src, bytes: src.as_bytes(), pos: 0, file, base: 0, inline: false, indents: vec![0], depth: 0, out: vec![], diags };
     lx.run();
     lx.out
 }
 
 /// Lex a snippet embedded in a larger file (used for f-string expressions).
 pub fn lex_inline(src: &str, file: u32, base: usize, diags: &mut Diagnostics) -> Vec<Token> {
-    let mut lx = Lexer {
-        src,
-        bytes: src.as_bytes(),
-        pos: 0,
-        file,
-        base,
-        inline: true,
-        indents: vec![0],
-        depth: 1,
-        out: vec![],
-        diags,
-    };
+    let mut lx = Lexer { src, bytes: src.as_bytes(), pos: 0, file, base, inline: true, indents: vec![0], depth: 1, out: vec![], diags };
     lx.run();
     lx.out
 }
@@ -369,7 +347,8 @@ impl<'a> Lexer<'a> {
             if saw_tab {
                 self.err(line_start, self.pos, "Tabs are not allowed for indentation.");
                 self.diags.items.last_mut().map(|d| {
-                    d.help = Some("Use spaces (4 per level is the convention). Configure your editor to insert spaces for the Tab key.".into())
+                    d.help =
+                        Some("Use spaces (4 per level is the convention). Configure your editor to insert spaces for the Tab key.".into())
                 });
             }
             let cur = *self.indents.last().unwrap();
@@ -382,14 +361,11 @@ impl<'a> Lexer<'a> {
                     self.push(Tok::Dedent, line_start, self.pos);
                 }
                 if *self.indents.last().unwrap() != width {
-                    self.err(
-                        line_start,
-                        self.pos,
-                        "This line is indented differently from any enclosing block.",
-                    );
-                    self.diags.items.last_mut().map(|d| {
-                        d.help = Some("Dedent to the same column as an earlier line of the surrounding block.".into())
-                    });
+                    self.err(line_start, self.pos, "This line is indented differently from any enclosing block.");
+                    self.diags
+                        .items
+                        .last_mut()
+                        .map(|d| d.help = Some("Dedent to the same column as an earlier line of the surrounding block.".into()));
                     // Recover by treating it as the enclosing level.
                     self.indents.push(width);
                 }
@@ -450,8 +426,7 @@ impl<'a> Lexer<'a> {
             }
         }
         if matches!(self.peek(0), b'e' | b'E')
-            && (self.peek(1).is_ascii_digit()
-                || (matches!(self.peek(1), b'+' | b'-') && self.peek(2).is_ascii_digit()))
+            && (self.peek(1).is_ascii_digit() || (matches!(self.peek(1), b'+' | b'-') && self.peek(2).is_ascii_digit()))
         {
             is_float = true;
             self.pos += 2;

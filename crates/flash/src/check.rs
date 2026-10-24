@@ -89,7 +89,16 @@ pub fn is_int_lit(e: &Expr) -> bool {
         ExprKind::Int(_) => true,
         ExprKind::Unary(UnOp::Neg | UnOp::BitNot, a) => is_int_lit(a),
         ExprKind::Binary(
-            BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Rem | BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor | BinOp::Shl | BinOp::Shr,
+            BinOp::Add
+            | BinOp::Sub
+            | BinOp::Mul
+            | BinOp::Div
+            | BinOp::Rem
+            | BinOp::BitAnd
+            | BinOp::BitOr
+            | BinOp::BitXor
+            | BinOp::Shl
+            | BinOp::Shr,
             a,
             b,
         ) => is_int_lit(a) && is_int_lit(b),
@@ -133,13 +142,7 @@ impl<'a> Checker<'a> {
                 if let Item::Struct(s) = it {
                     if !self.struct_ids.contains_key(&s.name) {
                         self.struct_ids.insert(s.name.clone(), self.structs.len());
-                        self.structs.push(StructInfo {
-                            name: s.name.clone(),
-                            fields: vec![],
-                            span: s.name_span,
-                            offsets: vec![],
-                            size: 8,
-                        });
+                        self.structs.push(StructInfo { name: s.name.clone(), fields: vec![], span: s.name_span, offsets: vec![], size: 8 });
                     }
                 }
             }
@@ -181,10 +184,9 @@ impl<'a> Checker<'a> {
                             Ok(t) if matches!(t, Type::Int(_) | Type::Float | Type::Bool | Type::Str) => params.push((pn.clone(), t)),
                             Ok(t) => {
                                 let tn = self.tn(&t);
-                                self.error(
-                                    Diagnostic::error(te.span, format!("An `extern fn` parameter cannot have type {}.", tn))
-                                        .help("C functions can take integers, Float, Bool and String (passed as a pointer and a byte length)."),
-                                );
+                                self.error(Diagnostic::error(te.span, format!("An `extern fn` parameter cannot have type {}.", tn)).help(
+                                    "C functions can take integers, Float, Bool and String (passed as a pointer and a byte length).",
+                                ));
                                 ok = false;
                             }
                             Err(_) => ok = false,
@@ -241,15 +243,8 @@ impl<'a> Checker<'a> {
         self.stmts_into(&script, &mut body);
         let cx = self.stack.pop().unwrap();
         let span = script.first().map(|s| s.span).unwrap_or_default();
-        self.funcs[main_id] = Some(HFunc {
-            name: "main".into(),
-            params: vec![],
-            locals: cx.locals,
-            ret: Type::None,
-            body,
-            span,
-            is_main: true,
-        });
+        self.funcs[main_id] =
+            Some(HFunc { name: "main".into(), params: vec![], locals: cx.locals, ret: Type::None, body, span, is_main: true });
 
         // Check every function that needs no inference even when it is never called.
         for fidx in 0..self.fns.len() {
@@ -273,7 +268,13 @@ impl<'a> Checker<'a> {
             return None;
         }
         let funcs: Vec<HFunc> = std::mem::take(&mut self.funcs).into_iter().map(|f| f.expect("function was checked")).collect();
-        Some(Program { funcs, structs: std::mem::take(&mut self.structs), main: main_id, plugins: self.plugins.to_vec(), externs: std::mem::take(&mut self.externs) })
+        Some(Program {
+            funcs,
+            structs: std::mem::take(&mut self.structs),
+            main: main_id,
+            plugins: self.plugins.to_vec(),
+            externs: std::mem::take(&mut self.externs),
+        })
     }
 
     fn new_func_slot(&mut self) -> FuncId {
@@ -358,8 +359,11 @@ impl<'a> Checker<'a> {
                 ParamMode::Mut => {
                     if ty.is_copy() {
                         self.error(
-                            Diagnostic::error(p.span, format!("A `mut` parameter must be a String, List or struct, but '{}' is {}.", p.name, self.tn(ty)))
-                                .help("Numbers and booleans are copied into functions. Return the new value instead."),
+                            Diagnostic::error(
+                                p.span,
+                                format!("A `mut` parameter must be a String, List or struct, but '{}' is {}.", p.name, self.tn(ty)),
+                            )
+                            .help("Numbers and booleans are copied into functions. Return the new value instead."),
                         );
                     }
                     LocalKind::ParamMut
@@ -382,19 +386,15 @@ impl<'a> Checker<'a> {
         self.ret_of[id] = Some(ret.clone());
         if ret != Type::None && ret != Type::Error && !always_returns(&body) && self.diags.error_count() == nparams_before {
             self.error(
-                Diagnostic::error(def.name_span, format!("The function '{}' can reach its end without returning a value.", def.name))
-                    .help(format!("Every path through the function must `return` a {} (add a `return` at the end or in the `else` branch).", self.tn(&ret))),
+                Diagnostic::error(def.name_span, format!("The function '{}' can reach its end without returning a value.", def.name)).help(
+                    format!(
+                        "Every path through the function must `return` a {} (add a `return` at the end or in the `else` branch).",
+                        self.tn(&ret)
+                    ),
+                ),
             );
         }
-        self.funcs[id] = Some(HFunc {
-            name: def.name.clone(),
-            params,
-            locals: cx.locals,
-            ret,
-            body,
-            span: def.span,
-            is_main: false,
-        });
+        self.funcs[id] = Some(HFunc { name: def.name.clone(), params, locals: cx.locals, ret, body, span: def.span, is_main: false });
         Ok(id)
     }
 
@@ -507,8 +507,7 @@ impl<'a> Checker<'a> {
     fn return_stmt(&mut self, e: Option<&Expr>, span: Span, out: &mut Vec<HStmt>) -> R<()> {
         if self.cx().is_main {
             return self.fail(
-                Diagnostic::error(span, "`return` can only be used inside a function.")
-                    .help("To stop the program early, call exit(0)."),
+                Diagnostic::error(span, "`return` can only be used inside a function.").help("To stop the program early, call exit(0)."),
             );
         }
         let expected = self.cx().ret.clone();
@@ -633,7 +632,11 @@ impl<'a> Checker<'a> {
                     let v = self.expr(value, Some(&lty), Ctx::Value);
                     let v = v?;
                     if lkind == LocalKind::ParamBorrow || lkind == LocalKind::LoopRef {
-                        let what = if lkind == LocalKind::LoopRef { "a loop variable that borrows a list element" } else { "a read-only parameter" };
+                        let what = if lkind == LocalKind::LoopRef {
+                            "a loop variable that borrows a list element"
+                        } else {
+                            "a read-only parameter"
+                        };
                         return self.fail(
                             Diagnostic::error(target.span, format!("Cannot assign to '{}' because it is {}.", name, what))
                                 .help("Make a new variable with `copy(...)`, or declare the parameter `mut` / `own`."),
@@ -685,9 +688,10 @@ impl<'a> Checker<'a> {
                 out.push(HStmt { kind: HStmtKind::Assign(place, v), span });
             }
             _ => {
-                return self.fail(
-                    Diagnostic::error(target.span, "You can only assign to a variable, a field (`a.b`) or a list element (`a[i]`).")
-                );
+                return self.fail(Diagnostic::error(
+                    target.span,
+                    "You can only assign to a variable, a field (`a.b`) or a list element (`a[i]`).",
+                ));
             }
         }
         Ok(())
@@ -750,10 +754,12 @@ impl<'a> Checker<'a> {
                     _ => INT,
                 };
                 if *v < ty.min() || *v > ty.max() {
-                    return self.fail(
-                        Diagnostic::error(span, format!("The number {} does not fit in {}.", v, ty.name()))
-                            .help(format!("{} can hold {} to {}.", ty.name(), ty.min(), ty.max())),
-                    );
+                    return self.fail(Diagnostic::error(span, format!("The number {} does not fit in {}.", v, ty.name())).help(format!(
+                        "{} can hold {} to {}.",
+                        ty.name(),
+                        ty.min(),
+                        ty.max()
+                    )));
                 }
                 Ok(he(HKind::Int(*v as i64), Type::Int(ty), span))
             }
@@ -846,10 +852,9 @@ impl<'a> Checker<'a> {
     /// Moving an owned value out of a field / list slot would leave a hole behind.
     fn check_value_use(&mut self, ty: &Type, ctx: Ctx, span: Span, what: &str) -> R<()> {
         if ctx == Ctx::Value && ty.is_owned() {
-            return self.fail(
-                Diagnostic::error(span, format!("Cannot move {} out of its container.", what))
-                    .help("Use `copy(...)` to make an independent copy, or read it where a borrow is enough (for example inside `say(...)`)."),
-            );
+            return self.fail(Diagnostic::error(span, format!("Cannot move {} out of its container.", what)).help(
+                "Use `copy(...)` to make an independent copy, or read it where a borrow is enough (for example inside `say(...)`).",
+            ));
         }
         Ok(())
     }
@@ -861,10 +866,9 @@ impl<'a> Checker<'a> {
                 return Err(());
             }
             let tn = self.tn(&h.ty);
-            return self.fail(
-                Diagnostic::error(span, format!("The `?` operator needs a Result, but this is {}.", tn))
-                    .help("`?` unwraps the value of a fallible call such as read_file(path), or returns its error from the current function."),
-            );
+            return self.fail(Diagnostic::error(span, format!("The `?` operator needs a Result, but this is {}.", tn)).help(
+                "`?` unwraps the value of a fallible call such as read_file(path), or returns its error from the current function.",
+            ));
         };
         let t = (**t).clone();
         let (is_main, ret, declared) = {
@@ -995,7 +999,11 @@ impl<'a> Checker<'a> {
             } else {
                 format!("Cannot {} {} and {}.", verb, ln, rn)
             };
-            let mut d = Diagnostic::error(b.span, msg).label(if lt.is_numeric() { "expected a compatible numeric value".to_string() } else { format!("expected {}", ln) });
+            let mut d = Diagnostic::error(b.span, msg).label(if lt.is_numeric() {
+                "expected a compatible numeric value".to_string()
+            } else {
+                format!("expected {}", ln)
+            });
             d = d.note(a.span, format!("this is {}", ln));
             if lt != rt {
                 if (lt == Type::Float && rt.is_int()) || (lt.is_int() && rt == Type::Float) {
@@ -1034,7 +1042,10 @@ impl<'a> Checker<'a> {
                 if is_builtin(n) {
                     let list: Vec<&Expr> = args.iter().map(|a| &a.value).collect();
                     if let Some(a) = args.iter().find(|a| a.name.is_some()) {
-                        return self.fail(Diagnostic::error(a.value.span, format!("The built-in function '{}' does not take named arguments.", n)));
+                        return self.fail(Diagnostic::error(
+                            a.value.span,
+                            format!("The built-in function '{}' does not take named arguments.", n),
+                        ));
                     }
                     return self.builtin(n, &list, span, expected, ctx);
                 }
@@ -1088,7 +1099,12 @@ impl<'a> Checker<'a> {
                     if pos >= names.len() {
                         return self.fail(Diagnostic::error(
                             e.span,
-                            format!("{} takes {} argument{}, but more were given.", what, names.len(), if names.len() == 1 { "" } else { "s" }),
+                            format!(
+                                "{} takes {} argument{}, but more were given.",
+                                what,
+                                names.len(),
+                                if names.len() == 1 { "" } else { "s" }
+                            ),
                         ));
                     }
                     if slots[pos].is_some() {
@@ -1158,7 +1174,10 @@ impl<'a> Checker<'a> {
                 }
                 if h.ty.is_copy() {
                     let tn = self.tn(&h.ty);
-                    self.error(Diagnostic::error(e.span, format!("A `mut` parameter must be a String, List or struct, but this is {}.", tn)));
+                    self.error(Diagnostic::error(
+                        e.span,
+                        format!("A `mut` parameter must be a String, List or struct, but this is {}.", tn),
+                    ));
                     failed = true;
                     continue;
                 }
@@ -1176,8 +1195,14 @@ impl<'a> Checker<'a> {
         }
         let Some(ret) = self.ret_of[id].clone() else {
             return self.fail(
-                Diagnostic::error(span, format!("I can't work out what '{}' returns because it calls itself before any `return` that decides its type.", def.name))
-                    .help(format!("Add a return type: `fn {}(...) -> Int:`.", def.name)),
+                Diagnostic::error(
+                    span,
+                    format!(
+                        "I can't work out what '{}' returns because it calls itself before any `return` that decides its type.",
+                        def.name
+                    ),
+                )
+                .help(format!("Add a return type: `fn {}(...) -> Int:`.", def.name)),
             );
         };
         Ok(he(HKind::Call(id, hargs), ret, span))
@@ -1220,7 +1245,14 @@ impl<'a> Checker<'a> {
         if args.len() != f.params.len() {
             return self.fail(Diagnostic::error(
                 span,
-                format!("{} takes {} argument{}, but {} {} given.", what, f.params.len(), if f.params.len() == 1 { "" } else { "s" }, args.len(), if args.len() == 1 { "was" } else { "were" }),
+                format!(
+                    "{} takes {} argument{}, but {} {} given.",
+                    what,
+                    f.params.len(),
+                    if f.params.len() == 1 { "" } else { "s" },
+                    args.len(),
+                    if args.len() == 1 { "was" } else { "were" }
+                ),
             ));
         }
         let mut hs = vec![];
@@ -1259,7 +1291,14 @@ impl<'a> Checker<'a> {
         if args.len() != f.params.len() {
             return self.fail(Diagnostic::error(
                 span,
-                format!("{} takes {} argument{}, but {} {} given.", what, f.params.len(), if f.params.len() == 1 { "" } else { "s" }, args.len(), if args.len() == 1 { "was" } else { "were" }),
+                format!(
+                    "{} takes {} argument{}, but {} {} given.",
+                    what,
+                    f.params.len(),
+                    if f.params.len() == 1 { "" } else { "s" },
+                    args.len(),
+                    if args.len() == 1 { "was" } else { "were" }
+                ),
             ));
         }
         let mut hs = vec![];

@@ -373,7 +373,6 @@ fn release_builds_inline_small_functions() {
 
 #[test]
 fn recursive_functions_are_not_inlined_forever() {
-    use flashc::ir::*;
     let m = lowered("fn f(n: Int) -> Int:\n    if n < 2:\n        return n\n    return f(n - 1) + f(n - 2)\nsay(f(5))\n", true);
     assert!(m.funcs.iter().any(|f| f.name.starts_with("f_")), "recursive function must survive");
 }

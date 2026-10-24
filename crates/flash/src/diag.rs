@@ -23,24 +23,10 @@ pub struct Diagnostic {
 
 impl Diagnostic {
     pub fn error(span: Span, message: impl Into<String>) -> Diagnostic {
-        Diagnostic {
-            severity: Severity::Error,
-            message: message.into(),
-            span: Some(span),
-            label: None,
-            help: None,
-            notes: vec![],
-        }
+        Diagnostic { severity: Severity::Error, message: message.into(), span: Some(span), label: None, help: None, notes: vec![] }
     }
     pub fn error_nospan(message: impl Into<String>) -> Diagnostic {
-        Diagnostic {
-            severity: Severity::Error,
-            message: message.into(),
-            span: None,
-            label: None,
-            help: None,
-            notes: vec![],
-        }
+        Diagnostic { severity: Severity::Error, message: message.into(), span: None, label: None, help: None, notes: vec![] }
     }
     pub fn warning(span: Span, message: impl Into<String>) -> Diagnostic {
         Diagnostic { severity: Severity::Warning, ..Diagnostic::error(span, message) }
@@ -170,7 +156,7 @@ pub fn suggest<'a>(name: &str, candidates: impl Iterator<Item = &'a str>) -> Opt
     for c in candidates {
         let d = edit_distance(name, c);
         let limit = (name.len() / 3).max(1);
-        if d <= limit && best.as_ref().map_or(true, |(bd, _)| d < *bd) {
+        if d <= limit && best.as_ref().is_none_or(|(bd, _)| d < *bd) {
             best = Some((d, c.to_string()));
         }
     }

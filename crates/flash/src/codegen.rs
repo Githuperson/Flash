@@ -7,8 +7,7 @@ use std::collections::HashMap;
 
 use cranelift_codegen::ir::condcodes::{FloatCC, IntCC};
 use cranelift_codegen::ir::{
-    self, types, AbiParam, AliasRegion, AliasRegionData, InstBuilder, MemFlagsData, StackSlotData, StackSlotKind, TrapCode,
-    UserFuncName,
+    self, types, AbiParam, AliasRegion, AliasRegionData, InstBuilder, MemFlagsData, StackSlotData, StackSlotKind, TrapCode, UserFuncName,
 };
 use cranelift_codegen::isa::OwnedTargetIsa;
 use cranelift_codegen::settings::{self, Configurable};
@@ -52,11 +51,7 @@ pub fn make_isa(opts: &CodegenOptions) -> Result<OwnedTargetIsa, String> {
     let flags = settings::Flags::new(flags);
     match &opts.target {
         None => {
-            let b = if opts.release {
-                cranelift_native::builder()?
-            } else {
-                cranelift_native::builder_with_options(false)?
-            };
+            let b = if opts.release { cranelift_native::builder()? } else { cranelift_native::builder_with_options(false)? };
             b.finish(flags).map_err(|e| e.to_string())
         }
         Some(t) => {
@@ -96,9 +91,7 @@ pub fn compile(m: &fir::Module, opts: &CodegenOptions) -> Result<Vec<u8>, String
     // Runtime imports.
     let mut ext_ids: Vec<FuncId> = vec![];
     for e in &m.externs {
-        let id = module
-            .declare_function(&e.name, Linkage::Import, &sig_of(&e.params, e.ret))
-            .map_err(|er| er.to_string())?;
+        let id = module.declare_function(&e.name, Linkage::Import, &sig_of(&e.params, e.ret)).map_err(|er| er.to_string())?;
         ext_ids.push(id);
     }
     // Functions.
@@ -130,11 +123,8 @@ pub fn compile(m: &fir::Module, opts: &CodegenOptions) -> Result<Vec<u8>, String
             // Declare SSA variables for every virtual register.
             let vars: Vec<Variable> = f.vregs.iter().map(|t| b.declare_var(clif_ty(*t))).collect();
             let blocks: Vec<ir::Block> = f.blocks.iter().map(|_| b.create_block()).collect();
-            let slots: Vec<ir::StackSlot> = f
-                .stack_slots
-                .iter()
-                .map(|sz| b.create_sized_stack_slot(StackSlotData::new(StackSlotKind::ExplicitSlot, *sz, 3)))
-                .collect();
+            let slots: Vec<ir::StackSlot> =
+                f.stack_slots.iter().map(|sz| b.create_sized_stack_slot(StackSlotData::new(StackSlotKind::ExplicitSlot, *sz, 3))).collect();
             // Local FuncRefs.
             let mut fref_cache: HashMap<FuncId, ir::FuncRef> = HashMap::new();
             let mut regions: HashMap<u16, AliasRegion> = HashMap::new();
@@ -150,7 +140,20 @@ pub fn compile(m: &fir::Module, opts: &CodegenOptions) -> Result<Vec<u8>, String
                     b.switch_to_block(blocks[bi]);
                 }
                 for inst in &blk.insts {
-                    emit_inst(&mut b, &mut module, inst, &vars, &slots, &ext_ids, &func_ids, &data_ids, &mut fref_cache, &mut regions, &m.tags, f);
+                    emit_inst(
+                        &mut b,
+                        &mut module,
+                        inst,
+                        &vars,
+                        &slots,
+                        &ext_ids,
+                        &func_ids,
+                        &data_ids,
+                        &mut fref_cache,
+                        &mut regions,
+                        &m.tags,
+                        f,
+                    );
                 }
                 match &blk.term {
                     Term::Jump(t) => {

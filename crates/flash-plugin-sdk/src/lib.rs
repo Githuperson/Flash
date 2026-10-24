@@ -94,25 +94,41 @@ pub trait FromFlash<'a>: Sized {
 impl<'a> FromFlash<'a> for i64 {
     const TAG: u32 = tag::I64;
     fn from_flash(v: &'a FlashValue) -> Result<Self, String> {
-        if v.tag == tag::I64 { Ok(v.a as i64) } else { Err("expected an Int argument".into()) }
+        if v.tag == tag::I64 {
+            Ok(v.a as i64)
+        } else {
+            Err("expected an Int argument".into())
+        }
     }
 }
 impl<'a> FromFlash<'a> for u64 {
     const TAG: u32 = tag::U64;
     fn from_flash(v: &'a FlashValue) -> Result<Self, String> {
-        if v.tag == tag::U64 { Ok(v.a) } else { Err("expected a u64 argument".into()) }
+        if v.tag == tag::U64 {
+            Ok(v.a)
+        } else {
+            Err("expected a u64 argument".into())
+        }
     }
 }
 impl<'a> FromFlash<'a> for f64 {
     const TAG: u32 = tag::F64;
     fn from_flash(v: &'a FlashValue) -> Result<Self, String> {
-        if v.tag == tag::F64 { Ok(f64::from_bits(v.a)) } else { Err("expected a Float argument".into()) }
+        if v.tag == tag::F64 {
+            Ok(f64::from_bits(v.a))
+        } else {
+            Err("expected a Float argument".into())
+        }
     }
 }
 impl<'a> FromFlash<'a> for bool {
     const TAG: u32 = tag::BOOL;
     fn from_flash(v: &'a FlashValue) -> Result<Self, String> {
-        if v.tag == tag::BOOL { Ok(v.a != 0) } else { Err("expected a Bool argument".into()) }
+        if v.tag == tag::BOOL {
+            Ok(v.a != 0)
+        } else {
+            Err("expected a Bool argument".into())
+        }
     }
 }
 impl<'a> FromFlash<'a> for &'a str {

@@ -108,11 +108,11 @@ impl StructInfo {
         self.offsets.clear();
         for (_, t) in &self.fields {
             let sz = t.size();
-            off = (off + sz - 1) / sz * sz;
+            off = off.div_ceil(sz) * sz;
             self.offsets.push(off);
             off += sz;
         }
-        self.size = ((off + 7) / 8 * 8).max(8);
+        self.size = (off.div_ceil(8) * 8).max(8);
     }
 }
 

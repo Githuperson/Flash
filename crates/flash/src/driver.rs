@@ -69,7 +69,9 @@ impl Loader {
         }
         if self.in_progress.contains(&canon) {
             if let Some(sp) = import_span {
-                self.diags.push(Diagnostic::error(sp, "These modules import each other in a circle.").help("Move the shared code into a third module."));
+                self.diags.push(
+                    Diagnostic::error(sp, "These modules import each other in a circle.").help("Move the shared code into a third module."),
+                );
             }
             return None;
         }
@@ -110,7 +112,10 @@ impl Loader {
                         match stdlib_dir() {
                             Some(d) => d,
                             None => {
-                                self.diags.push(Diagnostic::error(imp.span, "Cannot find the Flash standard library folder.").help("Set FLASH_STD to the `stdlib` directory."));
+                                self.diags.push(
+                                    Diagnostic::error(imp.span, "Cannot find the Flash standard library folder.")
+                                        .help("Set FLASH_STD to the `stdlib` directory."),
+                                );
                                 continue;
                             }
                         }
@@ -154,8 +159,11 @@ impl Loader {
                     let Some(manifest) = crate::plugins::find_manifest(&pd.name, &dir) else {
                         let searched: Vec<String> = crate::plugins::search_dirs(&dir).iter().map(|d| d.display().to_string()).collect();
                         self.diags.push(
-                            Diagnostic::error(pd.span, format!("Cannot find the plugin manifest '{}'.", crate::plugins::manifest_file_name(&pd.name)))
-                                .help(format!("Searched: {}. Set FLASH_PLUGIN_PATH to add folders.", searched.join(", "))),
+                            Diagnostic::error(
+                                pd.span,
+                                format!("Cannot find the plugin manifest '{}'.", crate::plugins::manifest_file_name(&pd.name)),
+                            )
+                            .help(format!("Searched: {}. Set FLASH_PLUGIN_PATH to add folders.", searched.join(", "))),
                         );
                         continue;
                     };
@@ -299,10 +307,7 @@ pub fn find_runtime(release: bool) -> Result<PathBuf, String> {
             return Ok(p);
         }
     }
-    Err(format!(
-        "cannot find the Flash runtime library '{}'. Run `cargo build --workspace` first, or set FLASH_RT_LIB.",
-        name
-    ))
+    Err(format!("cannot find the Flash runtime library '{}'. Run `cargo build --workspace` first, or set FLASH_RT_LIB.", name))
 }
 
 pub fn link(obj: &Path, out: &Path, opts: &BuildOptions) -> Result<(), String> {
@@ -400,7 +405,10 @@ fn cache_key(fe: &Frontend, opts: &BuildOptions) -> String {
         h.update(rt.to_string_lossy().as_bytes());
         h.update(file_stamp(&rt).as_bytes());
     }
-    h.update(format!("{}|{:?}|{:?}|{:?}|{:?}", opts.release, opts.target, opts.backend, std::env::var("FLASH_CC").ok(), opts.link_args).as_bytes());
+    h.update(
+        format!("{}|{:?}|{:?}|{:?}|{:?}", opts.release, opts.target, opts.backend, std::env::var("FLASH_CC").ok(), opts.link_args)
+            .as_bytes(),
+    );
     for a in &opts.link_args {
         // linked archives may change without their path changing
         h.update(file_stamp(Path::new(a)).as_bytes());
@@ -421,11 +429,8 @@ pub fn build(src: &Path, opts: &BuildOptions) -> Result<(PathBuf, BuildTimings),
     let t0 = std::time::Instant::now();
     let fe = frontend(src, opts.source_suffix.as_deref())?;
     // Build cache: a hit skips lowering, code generation and linking.
-    let cache_entry = if opts.no_cache || opts.emit_ir || opts.emit_obj_only {
-        None
-    } else {
-        cache_dir().map(|d| d.join(cache_key(&fe, opts)))
-    };
+    let cache_entry =
+        if opts.no_cache || opts.emit_ir || opts.emit_obj_only { None } else { cache_dir().map(|d| d.join(cache_key(&fe, opts))) };
     let out = default_output(src, opts);
     if let Some(entry) = &cache_entry {
         if entry.is_file() && std::fs::copy(entry, &out).is_ok() {
@@ -510,7 +515,7 @@ fn collect_flash_files(dir: &Path, out: &mut Vec<PathBuf>) {
             if !name.starts_with('.') && name != "target" && name != "build" {
                 collect_flash_files(&p, out);
             }
-        } else if p.extension().map_or(false, |e| e == "flash") {
+        } else if p.extension().is_some_and(|e| e == "flash") {
             out.push(p);
         }
     }

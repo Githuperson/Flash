@@ -90,7 +90,8 @@ pub struct Resolved {
 
 pub fn valid_name(n: &str) -> bool {
     let mut cs = n.chars();
-    matches!(cs.next(), Some(c) if c.is_ascii_lowercase() || c == '_') && cs.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+    matches!(cs.next(), Some(c) if c.is_ascii_lowercase() || c == '_')
+        && cs.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
 }
 
 pub fn read_manifest(dir: &Path) -> Result<Manifest, String> {
@@ -164,12 +165,10 @@ pub fn resolve(root_dir: &Path) -> Result<Vec<Resolved>, String> {
             })?;
             let dm = read_manifest(&dep_dir).map_err(|e| format!("dependency '{}': {}", dep_name, e))?;
             if &dm.package.name != dep_name {
-                return Err(format!(
-                    "dependency '{}' of '{}' points to a package named '{}'",
-                    dep_name, m.package.name, dm.package.name
-                ));
+                return Err(format!("dependency '{}' of '{}' points to a package named '{}'", dep_name, m.package.name, dm.package.name));
             }
-            let src = if source == "root" { format!("path+{}", spec.path) } else { format!("path+{} (from {})", spec.path, m.package.name) };
+            let src =
+                if source == "root" { format!("path+{}", spec.path) } else { format!("path+{} (from {})", spec.path, m.package.name) };
             queue.push_back((dep_dir, dm, src));
         }
         out.push(Resolved { name: m.package.name.clone(), dir, manifest: m, source });

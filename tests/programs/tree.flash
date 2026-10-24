@@ -1,0 +1,28 @@
+struct Node:
+    value: Int
+    children: List[Node]
+
+fn make(depth: Int, value: Int) -> Node:
+    kids: List[Node] = []
+    if depth > 0:
+        for i in 0..3:
+            append(kids, make(depth - 1, value * 3 + i))
+    return Node(value=value, children=kids)
+
+fn total(n: Node) -> Int:
+    t = n.value
+    for c in n.children:
+        t += total(c)
+    return t
+
+fn count(n: Node) -> Int:
+    c = 1
+    for k in n.children:
+        c += count(k)
+    return c
+
+root = make(4, 1)
+say(total(root), count(root))
+copy_root = copy(root)
+root.value = 999
+say(copy_root.value, root.value, total(copy_root))

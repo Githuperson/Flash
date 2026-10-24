@@ -116,22 +116,74 @@ pub enum Callee {
 
 #[derive(Clone, Debug)]
 pub enum Inst {
-    IConst { dst: VReg, val: i64 },
-    FConst { dst: VReg, val: f64 },
-    Copy { dst: VReg, src: VReg },
-    Bin { dst: VReg, op: BinOp, a: VReg, b: VReg },
-    Cmp { dst: VReg, op: CmpOp, a: VReg, b: VReg },
-    Un { dst: VReg, op: UnOp, a: VReg },
-    Cast { dst: VReg, op: CastOp, src: VReg },
-    Load { dst: VReg, base: VReg, off: i32, tag: MemTag },
-    Store { base: VReg, off: i32, val: VReg, tag: MemTag },
-    Call { dst: Option<VReg>, callee: Callee, args: Vec<VReg> },
+    IConst {
+        dst: VReg,
+        val: i64,
+    },
+    FConst {
+        dst: VReg,
+        val: f64,
+    },
+    Copy {
+        dst: VReg,
+        src: VReg,
+    },
+    Bin {
+        dst: VReg,
+        op: BinOp,
+        a: VReg,
+        b: VReg,
+    },
+    Cmp {
+        dst: VReg,
+        op: CmpOp,
+        a: VReg,
+        b: VReg,
+    },
+    Un {
+        dst: VReg,
+        op: UnOp,
+        a: VReg,
+    },
+    Cast {
+        dst: VReg,
+        op: CastOp,
+        src: VReg,
+    },
+    Load {
+        dst: VReg,
+        base: VReg,
+        off: i32,
+        tag: MemTag,
+    },
+    Store {
+        base: VReg,
+        off: i32,
+        val: VReg,
+        tag: MemTag,
+    },
+    Call {
+        dst: Option<VReg>,
+        callee: Callee,
+        args: Vec<VReg>,
+    },
     /// Address of read-only/static data.
-    DataAddr { dst: VReg, data: DataId },
+    DataAddr {
+        dst: VReg,
+        data: DataId,
+    },
     /// Address of a function-local stack slot.
-    StackAddr { dst: VReg, slot: u32 },
+    StackAddr {
+        dst: VReg,
+        slot: u32,
+    },
     /// dst = cond ? a : b
-    Select { dst: VReg, cond: VReg, a: VReg, b: VReg },
+    Select {
+        dst: VReg,
+        cond: VReg,
+        a: VReg,
+        b: VReg,
+    },
 }
 
 #[derive(Clone, Debug)]

@@ -124,7 +124,10 @@ fn init(name: Option<&str>) -> ExitCode {
     };
     let pkg_name = match name {
         Some(n) => n.to_string(),
-        None => std::env::current_dir().ok().and_then(|d| d.file_name().map(|n| n.to_string_lossy().into_owned())).unwrap_or_else(|| "app".into()),
+        None => std::env::current_dir()
+            .ok()
+            .and_then(|d| d.file_name().map(|n| n.to_string_lossy().into_owned()))
+            .unwrap_or_else(|| "app".into()),
     };
     let pkg_name = pkg_name.to_lowercase().replace(['-', ' '], "_");
     if !pkg::valid_name(&pkg_name) {
@@ -136,7 +139,12 @@ fn init(name: Option<&str>) -> ExitCode {
     let _ = std::fs::create_dir_all(dir.join("src"));
     let _ = std::fs::create_dir_all(dir.join("tests"));
     let m = Manifest {
-        package: PackageSection { name: pkg_name.clone(), version: "0.1.0".into(), kind: Some("app".into()), entry: Some("src/main.flash".into()) },
+        package: PackageSection {
+            name: pkg_name.clone(),
+            version: "0.1.0".into(),
+            kind: Some("app".into()),
+            entry: Some("src/main.flash".into()),
+        },
         ..Default::default()
     };
     if let Err(e) = pkg::write_manifest(&dir, &m) {

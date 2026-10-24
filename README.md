@@ -158,7 +158,7 @@ toolchain requirements in `flash.toml`; their build commands are never run unles
 ## Tests
 
 ```bash
-cargo test --workspace            # ~110 tests; needs `cc`; plugin tests also use `c++`, LLVM tests use `clang` when present
+cargo test --workspace            # 75 test functions (the error test checks 49 programs, the fuzz test ~100 generated ones); needs `cc`, `c++`, `ar`, `rustc`; LLVM tests use `clang` and the memory test uses `valgrind` when present
 flash test tests/flash            # Flash-language tests of the standard library
 ```
 

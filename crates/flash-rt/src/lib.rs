@@ -645,6 +645,7 @@ pub unsafe extern "C" fn fl_plugin_call(
 
 // ------------------------------------------------------------------- entry
 extern "C" {
+    #[cfg_attr(test, allow(dead_code))]
     fn flash_main();
 }
 

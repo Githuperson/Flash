@@ -66,7 +66,8 @@ fn plugin_path_env(extra: &[&Path]) -> std::ffi::OsString {
 fn run_flash_with_plugins(src: &Path, extra: &[&Path], tag: &str) -> (std::process::Output, Option<std::process::Output>) {
     let dir = scratch_dir(tag);
     let exe = dir.join("prog");
-    let b = Command::new(flash_bin()).env("FLASH_CACHE_DIR", test_cache_dir())
+    let b = Command::new(flash_bin())
+        .env("FLASH_CACHE_DIR", test_cache_dir())
         .args(["build", src.to_str().unwrap(), "-o", exe.to_str().unwrap()])
         .env("FLASH_PLUGIN_PATH", plugin_path_env(extra))
         .output()
@@ -99,7 +100,8 @@ fn plugin_calls_work_in_release_mode_too() {
     let root = repo_root();
     let dir = scratch_dir("demo-rel");
     let exe = dir.join("prog");
-    let b = Command::new(flash_bin()).env("FLASH_CACHE_DIR", test_cache_dir())
+    let b = Command::new(flash_bin())
+        .env("FLASH_CACHE_DIR", test_cache_dir())
         .args(["build", root.join("examples/plugins_demo.flash").to_str().unwrap(), "-o", exe.to_str().unwrap(), "--release"])
         .env("FLASH_PLUGIN_PATH", plugin_path_env(&[]))
         .output()
@@ -150,7 +152,8 @@ impl Scratch {
         let src = self.write("main.flash", program);
         let exe = self.dir.join("main_exe");
         let env = std::env::join_paths([self.dir.clone()]).unwrap();
-        let b = Command::new(flash_bin()).env("FLASH_CACHE_DIR", test_cache_dir())
+        let b = Command::new(flash_bin())
+            .env("FLASH_CACHE_DIR", test_cache_dir())
             .args(["build", src.to_str().unwrap(), "-o", exe.to_str().unwrap()])
             .env("FLASH_PLUGIN_PATH", &env)
             .output()

@@ -36,11 +36,7 @@ fn check_reports_ok_or_errors_with_exit_codes() {
 fn run_forwards_the_program_exit_code_and_arguments() {
     let dir = scratch_dir("cli-run");
     let src = dir.join("args.flash");
-    std::fs::write(
-        &src,
-        "a = args()\nsay(len(a))\nfor x in a:\n    say(x)\nif len(a) > 1:\n    exit(7)\n",
-    )
-    .unwrap();
+    std::fs::write(&src, "a = args()\nsay(len(a))\nfor x in a:\n    say(x)\nif len(a) > 1:\n    exit(7)\n").unwrap();
     let out = flash(&["run", src.to_str().unwrap(), "--", "one", "two"]);
     assert_eq!(out.status.code(), Some(7));
     assert_eq!(text(&out.stdout), "2\none\ntwo\n");
@@ -106,10 +102,7 @@ fn formatter_is_idempotent_preserves_meaning_and_check_mode_works() {
     let before = flash(&["run", f.to_str().unwrap()]);
     let out = flash(&["fmt", f.to_str().unwrap(), "--stdout"]);
     let formatted = text(&out.stdout);
-    assert_eq!(
-        formatted,
-        "# top\nfn add(a, b):\n    return a + b  # sum\n\n\nx = add(1, 2) * -3\nprint(f\"v={x}\", 'q')\nsay()\n"
-    );
+    assert_eq!(formatted, "# top\nfn add(a, b):\n    return a + b  # sum\n\n\nx = add(1, 2) * -3\nprint(f\"v={x}\", 'q')\nsay()\n");
     assert_eq!(flash(&["fmt", f.to_str().unwrap(), "--check"]).status.code(), Some(1));
     assert_eq!(flash(&["fmt", f.to_str().unwrap()]).status.code(), Some(0));
     assert_eq!(flash(&["fmt", f.to_str().unwrap(), "--check"]).status.code(), Some(0));
@@ -161,10 +154,10 @@ fn cross_compilation_emits_objects_for_other_platforms() {
     let src = repo_root().join("examples/functions.flash");
     let dir = scratch_dir("cli-targets");
     let cases: [(&str, &[u8]); 4] = [
-        ("aarch64-apple-darwin", &[0xcf, 0xfa, 0xed, 0xfe]),  // Mach-O 64-bit little endian
+        ("aarch64-apple-darwin", &[0xcf, 0xfa, 0xed, 0xfe]), // Mach-O 64-bit little endian
         ("x86_64-apple-darwin", &[0xcf, 0xfa, 0xed, 0xfe]),
         ("aarch64-unknown-linux-gnu", b"\x7fELF"),
-        ("x86_64-pc-windows-msvc", &[0x64, 0x86]),            // COFF machine type AMD64
+        ("x86_64-pc-windows-msvc", &[0x64, 0x86]), // COFF machine type AMD64
     ];
     for (target, magic) in cases {
         for release in [false, true] {

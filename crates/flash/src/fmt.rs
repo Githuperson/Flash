@@ -68,9 +68,7 @@ pub fn format_source(src: &str) -> Result<String, String> {
     let mut out = String::new();
     let mut blank_run = 0usize;
     let mut prev_depth = 0usize;
-    let next_logical_depth = |from: usize| -> Option<usize> {
-        (from..lines.len()).find_map(|ln| owner[ln].map(|i| logicals[i].depth))
-    };
+    let next_logical_depth = |from: usize| -> Option<usize> { (from..lines.len()).find_map(|ln| owner[ln].map(|i| logicals[i].depth)) };
     let mut emitted_any = false;
     let mut ln = 0;
     while ln < lines.len() {
@@ -152,7 +150,17 @@ pub fn format_source(src: &str) -> Result<String, String> {
 fn is_operand_end(t: &Tok) -> bool {
     matches!(
         t,
-        Tok::Ident(_) | Tok::Int(_) | Tok::Float(_) | Tok::Str(_) | Tok::FStr(_) | Tok::RParen | Tok::RBracket | Tok::True | Tok::False | Tok::NoneLit | Tok::Question
+        Tok::Ident(_)
+            | Tok::Int(_)
+            | Tok::Float(_)
+            | Tok::Str(_)
+            | Tok::FStr(_)
+            | Tok::RParen
+            | Tok::RBracket
+            | Tok::True
+            | Tok::False
+            | Tok::NoneLit
+            | Tok::Question
     )
 }
 
@@ -194,15 +202,19 @@ fn render_line(src: &str, toks: &[Token]) -> String {
     let mut nest = 0i32;
     for (i, t) in toks.iter().enumerate() {
         let text = match &t.tok {
-            Tok::Ident(_) | Tok::Int(_) | Tok::Float(_) | Tok::Str(_) | Tok::FStr(_) => src[t.span.lo as usize..t.span.hi as usize].to_string(),
+            Tok::Ident(_) | Tok::Int(_) | Tok::Float(_) | Tok::Str(_) | Tok::FStr(_) => {
+                src[t.span.lo as usize..t.span.hi as usize].to_string()
+            }
             other => other.text().to_string(),
         };
         if i > 0 {
             let prev = &toks[i - 1].tok;
             let cur = &t.tok;
-            let prev_unary = matches!(prev, Tok::Minus | Tok::Plus | Tok::Tilde)
-                && (i < 2 || !is_operand_end(&toks[i - 2].tok));
-            let space = if matches!(cur, Tok::Comma | Tok::Colon | Tok::Dot | Tok::RParen | Tok::RBracket | Tok::Question | Tok::DotDot | Tok::DotDotEq) {
+            let prev_unary = matches!(prev, Tok::Minus | Tok::Plus | Tok::Tilde) && (i < 2 || !is_operand_end(&toks[i - 2].tok));
+            let space = if matches!(
+                cur,
+                Tok::Comma | Tok::Colon | Tok::Dot | Tok::RParen | Tok::RBracket | Tok::Question | Tok::DotDot | Tok::DotDotEq
+            ) {
                 false
             } else if matches!(prev, Tok::Dot | Tok::LParen | Tok::LBracket | Tok::Tilde | Tok::DotDot | Tok::DotDotEq) || prev_unary {
                 false

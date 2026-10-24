@@ -2,6 +2,15 @@
 //! source → lexer → parser → AST → resolver → checker (HIR) → borrow checker → lowering (IR)
 //! → optimiser → Cranelift codegen → linker.
 
+#![allow(
+    clippy::result_unit_err,
+    clippy::too_many_arguments,
+    clippy::type_complexity,
+    clippy::needless_range_loop,
+    clippy::if_same_then_else,
+    clippy::option_map_unit_fn
+)]
+
 pub mod ast;
 pub mod borrowck;
 pub mod builtins;

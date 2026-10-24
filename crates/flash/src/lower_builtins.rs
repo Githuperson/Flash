@@ -190,9 +190,27 @@ impl<'a, 'p> FnLower<'a, 'p> {
                 let ty = ir_ty(&args[0].ty);
                 let is_min = *b == B::Min;
                 let op = match &args[0].ty {
-                    Type::Float => if is_min { CmpOp::FLt } else { CmpOp::FGt },
-                    Type::Int(it) if it.signed => if is_min { CmpOp::SLt } else { CmpOp::SGt },
-                    _ => if is_min { CmpOp::ULt } else { CmpOp::UGt },
+                    Type::Float => {
+                        if is_min {
+                            CmpOp::FLt
+                        } else {
+                            CmpOp::FGt
+                        }
+                    }
+                    Type::Int(it) if it.signed => {
+                        if is_min {
+                            CmpOp::SLt
+                        } else {
+                            CmpOp::SGt
+                        }
+                    }
+                    _ => {
+                        if is_min {
+                            CmpOp::ULt
+                        } else {
+                            CmpOp::UGt
+                        }
+                    }
                 };
                 let c = self.cmp(op, a, b2);
                 let r = self.vreg(ty);
@@ -281,8 +299,18 @@ impl<'a, 'p> FnLower<'a, 'p> {
                 self.rt("fl_sleep_ms", &[v]);
                 self.dummy()
             }
-            B::Upper | B::Lower | B::Trim | B::PathFilename | B::PathParent | B::PathExt | B::ParseInt | B::ParseFloat
-            | B::ReadFile | B::RemoveFile | B::EnvVar | B::FileExists => {
+            B::Upper
+            | B::Lower
+            | B::Trim
+            | B::PathFilename
+            | B::PathParent
+            | B::PathExt
+            | B::ParseInt
+            | B::ParseFloat
+            | B::ReadFile
+            | B::RemoveFile
+            | B::EnvVar
+            | B::FileExists => {
                 let v = self.borrow(&args[0]);
                 let name = match b {
                     B::Upper => "fl_str_upper",
@@ -300,8 +328,18 @@ impl<'a, 'p> FnLower<'a, 'p> {
                 };
                 self.rtv(name, &[v])
             }
-            B::Contains | B::StartsWith | B::EndsWith | B::Replace | B::Split | B::Join | B::Find | B::Substr | B::ByteAt
-            | B::WriteFile | B::AppendFile | B::PathJoin => {
+            B::Contains
+            | B::StartsWith
+            | B::EndsWith
+            | B::Replace
+            | B::Split
+            | B::Join
+            | B::Find
+            | B::Substr
+            | B::ByteAt
+            | B::WriteFile
+            | B::AppendFile
+            | B::PathJoin => {
                 let vs: Vec<VReg> = args.iter().map(|a| self.borrow(a)).collect();
                 let name = match b {
                     B::Contains => "fl_str_contains",

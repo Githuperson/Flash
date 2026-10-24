@@ -261,7 +261,11 @@ fn fold_constants(f: &mut Function) -> bool {
 }
 
 fn identity_rhs(op: BinOp, y: i64) -> bool {
-    matches!((op, y), (BinOp::Add | BinOp::Sub | BinOp::Or | BinOp::Xor | BinOp::Shl | BinOp::SShr | BinOp::UShr, 0) | (BinOp::Mul | BinOp::SDiv | BinOp::UDiv, 1))
+    matches!(
+        (op, y),
+        (BinOp::Add | BinOp::Sub | BinOp::Or | BinOp::Xor | BinOp::Shl | BinOp::SShr | BinOp::UShr, 0)
+            | (BinOp::Mul | BinOp::SDiv | BinOp::UDiv, 1)
+    )
 }
 fn identity_lhs(op: BinOp, x: i64) -> bool {
     matches!((op, x), (BinOp::Add | BinOp::Or | BinOp::Xor, 0) | (BinOp::Mul, 1))
@@ -588,7 +592,7 @@ fn splice(f: &mut Function, bi: usize, ii: usize, dst: Option<VReg>, args: &[VRe
     let sbase = f.stack_slots.len() as u32;
     f.stack_slots.extend(callee.stack_slots.iter().copied());
     let bbase = f.blocks.len() as u32 + 1; // block 0 of the callee goes at index bbase
-    // continuation block: instructions after the call + original terminator
+                                           // continuation block: instructions after the call + original terminator
     let tail: Vec<Inst> = f.blocks[bi].insts.split_off(ii + 1);
     f.blocks[bi].insts.pop(); // the call itself
     let old_term = std::mem::replace(&mut f.blocks[bi].term, Term::Jump(bbase));

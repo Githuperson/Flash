@@ -381,12 +381,13 @@ pub fn find_clang() -> Option<String> {
     }
     ["clang", "clang-18", "clang-17", "clang-19", "clang-16", "clang-15"]
         .iter()
-        .find(|c| Command::new(c).arg("--version").stdout(Stdio::null()).stderr(Stdio::null()).status().map_or(false, |s| s.success()))
+        .find(|c| Command::new(c).arg("--version").stdout(Stdio::null()).stderr(Stdio::null()).status().is_ok_and(|s| s.success()))
         .map(|s| s.to_string())
 }
 
 pub fn compile(m: &Module, opts: &CodegenOptions) -> Result<Vec<u8>, String> {
-    let clang = find_clang().ok_or("the LLVM backend needs `clang` on the PATH (or set FLASH_CLANG); use the default Cranelift backend otherwise")?;
+    let clang = find_clang()
+        .ok_or("the LLVM backend needs `clang` on the PATH (or set FLASH_CLANG); use the default Cranelift backend otherwise")?;
     let ll = emit_ir(m);
     let dir = std::env::temp_dir().join(format!("flash-llvm-{}-{}", std::process::id(), m.funcs.len()));
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
@@ -402,7 +403,12 @@ pub fn compile(m: &Module, opts: &CodegenOptions) -> Result<Vec<u8>, String> {
     let out = cmd.output().map_err(|e| format!("cannot run {}: {}", clang, e))?;
     if !out.status.success() {
         let _ = std::fs::write(dir.join("program.ll"), &ll);
-        return Err(format!("{} failed on the generated LLVM IR (kept in {}):\n{}", clang, dir.display(), String::from_utf8_lossy(&out.stderr)));
+        return Err(format!(
+            "{} failed on the generated LLVM IR (kept in {}):\n{}",
+            clang,
+            dir.display(),
+            String::from_utf8_lossy(&out.stderr)
+        ));
     }
     let bytes = std::fs::read(&obj_path).map_err(|e| e.to_string())?;
     let _ = std::fs::remove_dir_all(&dir);

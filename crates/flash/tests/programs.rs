@@ -8,9 +8,8 @@ fn run_program(dir: &str, name: &str) {
     let root = repo_root();
     let src = root.join(dir).join(format!("{}.flash", name));
     let expected = std::fs::read_to_string(root.join(dir).join(format!("{}.expected", name))).unwrap();
-    let want_exit: i32 = std::fs::read_to_string(root.join(dir).join(format!("{}.exit", name)))
-        .map(|s| s.trim().parse().unwrap())
-        .unwrap_or(0);
+    let want_exit: i32 =
+        std::fs::read_to_string(root.join(dir).join(format!("{}.exit", name))).map(|s| s.trim().parse().unwrap()).unwrap_or(0);
     // dev and release with Cranelift; release with LLVM when clang is installed
     let mut configs: Vec<(bool, Option<&str>)> = vec![(false, None), (true, None)];
     if clang_available() {
@@ -45,7 +44,7 @@ macro_rules! programs {
 
 mod tests_dir {
     use super::*;
-    programs!("tests/programs": integers, strings, scopes, results, ownership, ownership_flow, generics, modules);
+    programs!("tests/programs": integers, strings, scopes, results, ownership, ownership_flow, generics, modules, tree);
 }
 
 mod examples_dir {

@@ -17,7 +17,20 @@ fn build_libs(tag: &str) -> std::path::PathBuf {
     cc(&["ar", "rcs", &format!("{}/libmathlib.a", d), &format!("{}/mathlib.o", d)]);
     cc(&["c++", "-std=c++17", "-O2", "-fPIC", "-c", src.join("stats.cpp").to_str().unwrap(), "-o", &format!("{}/stats.o", d)]);
     cc(&["ar", "rcs", &format!("{}/libstats.a", d), &format!("{}/stats.o", d)]);
-    cc(&["rustc", "--crate-type", "staticlib", "-C", "panic=abort", "-C", "opt-level=2", "--edition", "2021", src.join("rust_static.rs").to_str().unwrap(), "-o", &format!("{}/librust_static.a", d)]);
+    cc(&[
+        "rustc",
+        "--crate-type",
+        "staticlib",
+        "-C",
+        "panic=abort",
+        "-C",
+        "opt-level=2",
+        "--edition",
+        "2021",
+        src.join("rust_static.rs").to_str().unwrap(),
+        "-o",
+        &format!("{}/librust_static.a", d),
+    ]);
     dir
 }
 

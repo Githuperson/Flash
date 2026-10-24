@@ -22,7 +22,13 @@ fn ownership_programs_are_clean_under_valgrind() {
     if clang_available() {
         configs.push(vec!["--release", "--backend", "llvm"]);
     }
-    for prog in ["tests/programs/ownership.flash", "tests/programs/ownership_flow.flash", "tests/programs/strings.flash", "tests/programs/modules.flash", "examples/lists.flash"] {
+    for prog in [
+        "tests/programs/ownership.flash",
+        "tests/programs/ownership_flow.flash",
+        "tests/programs/strings.flash",
+        "tests/programs/modules.flash",
+        "examples/lists.flash",
+    ] {
         for (i, cfg) in configs.iter().enumerate() {
             let exe = dir.join(format!("vg{}", i));
             let src = root.join(prog);

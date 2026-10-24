@@ -54,14 +54,15 @@ enum E {
 fn gen(r: &mut Rng, t: Ity, depth: u32, nvars: usize) -> E {
     if depth == 0 || r.below(5) == 0 {
         return if r.below(3) == 0 {
-            let edges: [i128; 6] = [0, 1, -1, t.signed.then(|| -(1i128 << (t.bits - 1))).unwrap_or(0), (1i128 << (t.bits - (t.signed as u32))) - 1, 7];
+            let edges: [i128; 6] =
+                [0, 1, -1, if t.signed { -(1i128 << (t.bits - 1)) } else { 0 }, (1i128 << (t.bits - (t.signed as u32))) - 1, 7];
             let v = if r.below(2) == 0 { edges[r.below(6) as usize] } else { wrap(t, (r.next() as i128) % 1000 - 300) };
             E::Lit(wrap(t, v))
         } else {
             E::Var(r.below(nvars as u64) as usize)
         };
     }
-    let mut sub = |r: &mut Rng| Box::new(gen(r, t, depth - 1, nvars));
+    let sub = |r: &mut Rng| Box::new(gen(r, t, depth - 1, nvars));
     match r.below(10) {
         0 => E::Bin("+", sub(r), sub(r)),
         1 => E::Bin("-", sub(r), sub(r)),
@@ -141,7 +142,7 @@ fn eval(e: &E, t: Ity, vars: &[i128]) -> i128 {
     }
 }
 
-fn show(e: &E, t: Ity) -> String {
+fn show(e: &E, _t: Ity) -> String {
     match e {
         E::Lit(v) => {
             if *v < 0 {
@@ -151,19 +152,20 @@ fn show(e: &E, t: Ity) -> String {
             }
         }
         E::Var(i) => format!("v{}", i),
-        E::Bin(op, a, b) => format!("({} {} {})", show(a, t), op, show(b, t)),
-        E::Div(op, a, b) => format!("({} {} (({} & 7) + 1))", show(a, t), op, show(b, t)),
-        E::Shift(op, a, b) => format!("({} {} ({} & 7))", show(a, t), op, show(b, t)),
-        E::Neg(a) => format!("(-{})", show(a, t)),
-        E::Not(a) => format!("(~{})", show(a, t)),
-        E::Cmp(op, a, b, x, y) => format!("pick({} {} {}, {}, {})", show(a, t), op, show(b, t), show(x, t), show(y, t)),
+        E::Bin(op, a, b) => format!("({} {} {})", show(a, _t), op, show(b, _t)),
+        E::Div(op, a, b) => format!("({} {} (({} & 7) + 1))", show(a, _t), op, show(b, _t)),
+        E::Shift(op, a, b) => format!("({} {} ({} & 7))", show(a, _t), op, show(b, _t)),
+        E::Neg(a) => format!("(-{})", show(a, _t)),
+        E::Not(a) => format!("(~{})", show(a, _t)),
+        E::Cmp(op, a, b, x, y) => format!("pick({} {} {}, {}, {})", show(a, _t), op, show(b, _t), show(x, _t), show(y, _t)),
     }
 }
 
 fn program(seed: u64, t: Ity, literal_args: bool) -> (String, Vec<i128>) {
     let mut r = Rng(seed);
     let nvars = 3;
-    let vals: Vec<i128> = (0..nvars).map(|_| wrap(t, (r.next() as i128 % 2000) - 1000 + if r.below(4) == 0 { 1 << (t.bits - 1) } else { 0 })).collect();
+    let vals: Vec<i128> =
+        (0..nvars).map(|_| wrap(t, (r.next() as i128 % 2000) - 1000 + if r.below(4) == 0 { 1 << (t.bits - 1) } else { 0 })).collect();
     let exprs: Vec<E> = (0..10).map(|_| gen(&mut r, t, 4, nvars)).collect();
     let expected: Vec<i128> = exprs.iter().map(|e| eval(e, t, &vals)).collect();
     let n = t.name;
@@ -171,7 +173,7 @@ fn program(seed: u64, t: Ity, literal_args: bool) -> (String, Vec<i128>) {
     src.push_str(&format!("fn run(v0: {n}, v1: {n}, v2: {n}):\n"));
     // A typed binding gives literal-only expressions their integer type (otherwise they would be Int).
     for (i, e) in exprs.iter().enumerate() {
-        src.push_str(&format!("    r{i}: {n} = {e}\n    say(r{i})\n", i = i, n = n, e = show(e, t)));
+        src.push_str(&format!("    r{i}: {n} = {e}\n    say(r{i})\n", i = i, n = n, e = show(e, _t)));
     }
     src.push('\n');
     if literal_args {
@@ -218,14 +220,25 @@ fn random_integer_programs_agree_with_the_reference_evaluator_in_every_configura
                 let want: String = expected.iter().map(|v| format!("{}\n", v)).collect();
                 // runtime arguments (re-derive the values the same way as in `program`)
                 let mut r = Rng(s);
-                let vals: Vec<i128> = (0..3).map(|_| wrap(*t, (r.next() as i128 % 2000) - 1000 + if r.below(4) == 0 { 1 << (t.bits - 1) } else { 0 })).collect();
+                let vals: Vec<i128> = (0..3)
+                    .map(|_| wrap(*t, (r.next() as i128 % 2000) - 1000 + if r.below(4) == 0 { 1 << (t.bits - 1) } else { 0 }))
+                    .collect();
                 let args: Vec<String> = vals.iter().map(|v| v.to_string()).collect();
                 if !literal_args && vals.iter().any(|v| *v > i64::MAX as i128) {
                     continue;
                 }
                 for (ci, (release, backend)) in configs.iter().enumerate() {
                     let got = run_config(&src, &args, *release, *backend, &format!("fuzz-{}-{}-{}-{}", ti, seed, literal_args, ci));
-                    assert_eq!(got, want, "type {} seed {} literal_args {} config {:?}\n--- source ---\n{}", t.name, seed, literal_args, (release, backend), src);
+                    assert_eq!(
+                        got,
+                        want,
+                        "type {} seed {} literal_args {} config {:?}\n--- source ---\n{}",
+                        t.name,
+                        seed,
+                        literal_args,
+                        (release, backend),
+                        src
+                    );
                     total += 1;
                 }
             }

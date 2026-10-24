@@ -146,7 +146,12 @@ fn main() -> ExitCode {
             let Some(f) = file else { return usage("build") };
             match driver::build(&f, &opts) {
                 Ok((out, t)) if t.cached => {
-                    println!("Built {} ({} mode; reused from the build cache in {:.0?})", out.display(), if opts.release { "release" } else { "dev" }, t.frontend);
+                    println!(
+                        "Built {} ({} mode; reused from the build cache in {:.0?})",
+                        out.display(),
+                        if opts.release { "release" } else { "dev" },
+                        t.frontend
+                    );
                     ExitCode::SUCCESS
                 }
                 Ok((out, t)) => {
@@ -167,13 +172,8 @@ fn main() -> ExitCode {
             }
         }
         "test" => {
-            let target = file.unwrap_or_else(|| {
-                if std::path::Path::new("tests").is_dir() {
-                    PathBuf::from("tests")
-                } else {
-                    PathBuf::from(".")
-                }
-            });
+            let target =
+                file.unwrap_or_else(|| if std::path::Path::new("tests").is_dir() { PathBuf::from("tests") } else { PathBuf::from(".") });
             let s = driver::run_tests(&target, opts.release);
             println!("\ntest result: {} passed; {} failed; {} files failed to compile", s.passed, s.failed, s.compile_errors);
             if s.passed + s.failed + s.compile_errors == 0 {

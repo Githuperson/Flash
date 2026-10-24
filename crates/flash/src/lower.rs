@@ -175,7 +175,9 @@ fn body_mutates(stmts: &[HStmt], xs: LocalId) -> bool {
                 (matches!(b, Builtin::Append | Builtin::Pop) && args.first().and_then(root) == Some(xs)) || args.iter().any(|a| expr(a, xs))
             }
             HKind::Call(_, args) => args.iter().any(|a| root(a) == Some(xs) && !a.ty.is_copy() || expr(a, xs)),
-            HKind::PluginCall { args, .. } | HKind::ExternCall { args, .. } | HKind::Struct(args) | HKind::List(args) => args.iter().any(|a| expr(a, xs)),
+            HKind::PluginCall { args, .. } | HKind::ExternCall { args, .. } | HKind::Struct(args) | HKind::List(args) => {
+                args.iter().any(|a| expr(a, xs))
+            }
             HKind::Unary(_, a) | HKind::Cast(a) | HKind::Try(a) | HKind::Field(a, _) => expr(a, xs),
             HKind::Binary(_, a, b) | HKind::Logic(_, a, b) | HKind::Index(a, b) => expr(a, xs) || expr(b, xs),
             _ => false,
@@ -213,7 +215,12 @@ fn collect_moves_expr(e: &HExpr, out: &mut HashSet<LocalId>) {
             collect_moves_expr(a, out);
             collect_moves_expr(b, out);
         }
-        HKind::Call(_, args) | HKind::Builtin(_, args) | HKind::Struct(args) | HKind::List(args) | HKind::PluginCall { args, .. } | HKind::ExternCall { args, .. } => {
+        HKind::Call(_, args)
+        | HKind::Builtin(_, args)
+        | HKind::Struct(args)
+        | HKind::List(args)
+        | HKind::PluginCall { args, .. }
+        | HKind::ExternCall { args, .. } => {
             for a in args {
                 collect_moves_expr(a, out);
             }

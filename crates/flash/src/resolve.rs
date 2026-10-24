@@ -27,16 +27,7 @@ struct Resolver<'a> {
 }
 
 pub fn resolve(mods: &[LoadedModule], plugins: &[PluginBinding], diags: &mut Diagnostics) {
-    let mut r = Resolver {
-        mods,
-        plugins,
-        diags,
-        fns: vec![],
-        structs: HashMap::new(),
-        cur: 0,
-        scopes: vec![],
-        loop_depth: 0,
-    };
+    let mut r = Resolver { mods, plugins, diags, fns: vec![], structs: HashMap::new(), cur: 0, scopes: vec![], loop_depth: 0 };
     r.run();
 }
 
@@ -61,11 +52,8 @@ impl<'a> Resolver<'a> {
                             );
                         } else if is_builtin(&f.name) {
                             self.diags.push(
-                                Diagnostic::error(
-                                    f.name_span,
-                                    format!("'{}' is a built-in function and cannot be redefined.", f.name),
-                                )
-                                .help("Choose a different name."),
+                                Diagnostic::error(f.name_span, format!("'{}' is a built-in function and cannot be redefined.", f.name))
+                                    .help("Choose a different name."),
                             );
                         } else {
                             names.insert(f.name.clone(), f.name_span);
@@ -73,9 +61,15 @@ impl<'a> Resolver<'a> {
                     }
                     Item::ExternFn(f) => {
                         if names.contains_key(&f.name) || is_builtin(&f.name) {
-                            self.diags.push(Diagnostic::error(f.name_span, format!("The name '{}' is already used by another function.", f.name)));
+                            self.diags.push(Diagnostic::error(
+                                f.name_span,
+                                format!("The name '{}' is already used by another function.", f.name),
+                            ));
                         } else if f.name.starts_with("fl_") || f.name.starts_with("flash_") {
-                            self.diags.push(Diagnostic::error(f.name_span, "Names starting with `fl_` or `flash_` are reserved for the Flash runtime."));
+                            self.diags.push(Diagnostic::error(
+                                f.name_span,
+                                "Names starting with `fl_` or `flash_` are reserved for the Flash runtime.",
+                            ));
                         } else {
                             names.insert(f.name.clone(), f.name_span);
                         }
@@ -92,10 +86,8 @@ impl<'a> Resolver<'a> {
                         let mut seen = HashSet::new();
                         for f in &s.fields {
                             if !seen.insert(f.name.clone()) {
-                                self.diags.push(Diagnostic::error(
-                                    f.span,
-                                    format!("The field '{}' appears twice in struct {}.", f.name, s.name),
-                                ));
+                                self.diags
+                                    .push(Diagnostic::error(f.span, format!("The field '{}' appears twice in struct {}.", f.name, s.name)));
                             }
                         }
                     }
@@ -109,6 +101,24 @@ impl<'a> Resolver<'a> {
                 }
             }
             self.fns.push(names.keys().cloned().collect());
+        }
+        // A function and a struct with the same name would make `Name(...)` ambiguous.
+        for (mi, m) in self.mods.iter().enumerate() {
+            for it in &m.ast.items {
+                let clash = match it {
+                    Item::Fn(f) => self.structs.get(&f.name).map(|sp| (f.name_span, f.name.clone(), *sp)),
+                    Item::ExternFn(f) => self.structs.get(&f.name).map(|sp| (f.name_span, f.name.clone(), *sp)),
+                    _ => None,
+                };
+                if let Some((span, name, other)) = clash {
+                    let _ = mi;
+                    self.diags.push(
+                        Diagnostic::error(span, format!("'{}' is used for both a function and a struct.", name))
+                            .note(other, "the struct is defined here")
+                            .help("Give one of them a different name."),
+                    );
+                }
+            }
         }
         // Pass 2: bodies.
         for mi in 0..self.mods.len() {
@@ -152,11 +162,7 @@ impl<'a> Resolver<'a> {
                             self.type_expr(t);
                         }
                     }
-                    Item::Stmt(s) => {
-                        if mi == 0 {
-                            self.stmt(s)
-                        }
-                    }
+                    Item::Stmt(s) if mi == 0 => self.stmt(s),
                     _ => {}
                 }
             }
@@ -343,10 +349,7 @@ impl<'a> Resolver<'a> {
                             } else if let Some(mi) = self.module_for_alias(m) {
                                 if !self.fns[mi].contains(name) {
                                     let c: Vec<&str> = self.fns[mi].iter().map(|s| s.as_str()).collect();
-                                    let mut d = Diagnostic::error(
-                                        *name_span,
-                                        format!("The module '{}' has no function '{}'.", m, name),
-                                    );
+                                    let mut d = Diagnostic::error(*name_span, format!("The module '{}' has no function '{}'.", m, name));
                                     if let Some(s) = suggest(name, c.into_iter()) {
                                         d = d.help(format!("Did you mean '{}'?", s));
                                     }
@@ -355,10 +358,8 @@ impl<'a> Resolver<'a> {
                             } else if let Some(pi) = self.plugin_for_alias(m) {
                                 if !self.plugins[pi].funcs.iter().any(|f| &f.name == name) {
                                     let c: Vec<&str> = self.plugins[pi].funcs.iter().map(|f| f.name.as_str()).collect();
-                                    let mut d = Diagnostic::error(
-                                        *name_span,
-                                        format!("The plugin '{}' does not export a function '{}'.", m, name),
-                                    );
+                                    let mut d =
+                                        Diagnostic::error(*name_span, format!("The plugin '{}' does not export a function '{}'.", m, name));
                                     if let Some(s) = suggest(name, c.into_iter()) {
                                         d = d.help(format!("Did you mean '{}'?", s));
                                     }

@@ -100,11 +100,7 @@ pub fn load(desc: &str) {
             ["dir", d] => dir = d.to_string(),
             ["integrity", i] => integrity = i.to_string(),
             ["fn", fname, params, ret, _fallible] => {
-                let pt: Vec<u32> = if *params == "-" {
-                    vec![]
-                } else {
-                    params.split(',').map(|t| tag_of(t).unwrap_or(u32::MAX)).collect()
-                };
+                let pt: Vec<u32> = if *params == "-" { vec![] } else { params.split(',').map(|t| tag_of(t).unwrap_or(u32::MAX)).collect() };
                 funcs.push((fname.to_string(), pt, tag_of(ret).unwrap_or(u32::MAX), *_fallible == "1"));
             }
             _ => {}
@@ -141,7 +137,14 @@ pub fn load(desc: &str) {
     let library = unsafe { libloading::Library::new(&path) }
         .unwrap_or_else(|e| fatal(&format!("cannot load plugin library {}: {}", path.display(), e)));
     let entry: libloading::Symbol<unsafe extern "C" fn() -> *const FlashPluginInfo> = unsafe { library.get(ENTRY_SYMBOL.as_bytes()) }
-        .unwrap_or_else(|_| fatal(&format!("{} does not export the entry point '{}': it is not a Flash plugin for ABI {}", path.display(), ENTRY_SYMBOL, ABI_VERSION)));
+        .unwrap_or_else(|_| {
+            fatal(&format!(
+                "{} does not export the entry point '{}': it is not a Flash plugin for ABI {}",
+                path.display(),
+                ENTRY_SYMBOL,
+                ABI_VERSION
+            ))
+        });
     let info = unsafe { entry() };
     if info.is_null() {
         fatal(&format!("plugin '{}' returned no metadata", name));

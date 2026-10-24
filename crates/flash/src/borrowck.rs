@@ -35,15 +35,7 @@ struct Ck<'a> {
 
 pub fn check(p: &Program, diags: &mut Diagnostics) {
     for f in &p.funcs {
-        let mut ck = Ck {
-            f,
-            prog: p,
-            diags,
-            state: Some(HashMap::new()),
-            locked: vec![],
-            loop_breaks: vec![],
-            loop_continues: vec![],
-        };
+        let mut ck = Ck { f, prog: p, diags, state: Some(HashMap::new()), locked: vec![], loop_breaks: vec![], loop_continues: vec![] };
         ck.stmts(&f.body);
     }
 }
@@ -116,29 +108,41 @@ impl<'a> Ck<'a> {
                 self.state = join(after_a, after_b);
             }
             HStmtKind::While(c, body) => {
-                self.looped(None, |ck| {
-                    ck.expr(c);
-                }, body);
+                self.looped(
+                    None,
+                    |ck| {
+                        ck.expr(c);
+                    },
+                    body,
+                );
             }
             HStmtKind::ForRange { var, lo, hi, body, .. } => {
                 self.expr(lo);
                 self.expr(hi);
                 let v = *var;
-                self.looped(None, |ck| {
-                    if let Some(st) = &mut ck.state {
-                        st.remove(&v);
-                    }
-                }, body);
+                self.looped(
+                    None,
+                    |ck| {
+                        if let Some(st) = &mut ck.state {
+                            st.remove(&v);
+                        }
+                    },
+                    body,
+                );
             }
             HStmtKind::ForList { var, list, body } => {
                 self.expr(list);
                 let lock = root(list).map(|r| (r, list.span));
                 let v = *var;
-                self.looped(lock, |ck| {
-                    if let Some(st) = &mut ck.state {
-                        st.remove(&v);
-                    }
-                }, body);
+                self.looped(
+                    lock,
+                    |ck| {
+                        if let Some(st) = &mut ck.state {
+                            st.remove(&v);
+                        }
+                    },
+                    body,
+                );
             }
             HStmtKind::Break => {
                 if let (Some(st), Some(b)) = (self.state.take(), self.loop_breaks.last_mut()) {
@@ -295,9 +299,12 @@ impl<'a> Ck<'a> {
                         if *r2 == r && (exclusive || *ex2) {
                             let n = self.f.locals[r].name.clone();
                             self.diags.push(
-                                Diagnostic::error(a.span, format!("'{}' is passed more than once to this call, and one use needs exclusive access.", n))
-                                    .note(*sp2, "first use")
-                                    .help("Pass a `copy(...)` for one of the arguments."),
+                                Diagnostic::error(
+                                    a.span,
+                                    format!("'{}' is passed more than once to this call, and one use needs exclusive access.", n),
+                                )
+                                .note(*sp2, "first use")
+                                .help("Pass a `copy(...)` for one of the arguments."),
                             );
                         }
                     }

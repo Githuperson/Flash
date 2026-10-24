@@ -72,7 +72,9 @@ impl<'a> Parser<'a> {
         }
         let mut d = Diagnostic::error(sp, format!("Expected {}, but found {}.", expected, found.describe()));
         if found == Tok::Indent {
-            d = d.help("This line is indented more than the line before it. Remove the extra spaces, or start a block with ':' on the line above.");
+            d = d.help(
+                "This line is indented more than the line before it. Remove the extra spaces, or start a block with ':' on the line above.",
+            );
         }
         d
     }
@@ -532,8 +534,9 @@ impl<'a> Parser<'a> {
         self.bump();
         let r = self.bitor_expr()?;
         if matches!(self.peek(), Tok::EqEq | Tok::NotEq | Tok::Lt | Tok::Le | Tok::Gt | Tok::Ge) {
-            return Err(Diagnostic::error(self.span(), "Comparisons cannot be chained.")
-                .help("Write `a < b and b < c` instead of `a < b < c`."));
+            return Err(
+                Diagnostic::error(self.span(), "Comparisons cannot be chained.").help("Write `a < b and b < c` instead of `a < b < c`.")
+            );
         }
         Ok(self.bin(op, l, r))
     }

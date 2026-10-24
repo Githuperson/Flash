@@ -146,7 +146,7 @@ age += 1                 # also -=  *=  /=  %=
 ```
 
 **Scope:** variables are *block scoped*. A variable first assigned inside an `if`/`while`/`for` body is not visible after the
-block. Assigning to a name that already exists in an enclosing block updates that variable (there is no shadowing).
+block. Assigning to a name that already exists in an enclosing block updates that variable (there is no shadowing). The one exception is a `for` loop variable: it is always a *new* variable that lives only inside the loop and hides an outer variable of the same name.
 Functions cannot see the variables of the top-level script (there are no global variables in v0.1).
 
 ### if / elif / else

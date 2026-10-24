@@ -108,12 +108,31 @@ pub struct Stmt {
 #[derive(Clone, Debug)]
 pub enum StmtKind {
     /// `target = value` or `target: Type = value`
-    Assign { target: Expr, ty: Option<TypeExpr>, value: Expr },
-    AugAssign { target: Expr, op: BinOp, value: Expr },
+    Assign {
+        target: Expr,
+        ty: Option<TypeExpr>,
+        value: Expr,
+    },
+    AugAssign {
+        target: Expr,
+        op: BinOp,
+        value: Expr,
+    },
     Expr(Expr),
-    If { branches: Vec<(Expr, Vec<Stmt>)>, else_body: Option<Vec<Stmt>> },
-    While { cond: Expr, body: Vec<Stmt> },
-    For { var: String, var_span: Span, iter: ForIter, body: Vec<Stmt> },
+    If {
+        branches: Vec<(Expr, Vec<Stmt>)>,
+        else_body: Option<Vec<Stmt>>,
+    },
+    While {
+        cond: Expr,
+        body: Vec<Stmt>,
+    },
+    For {
+        var: String,
+        var_span: Span,
+        iter: ForIter,
+        body: Vec<Stmt>,
+    },
     Break,
     Continue,
     Return(Option<Expr>),
@@ -123,7 +142,11 @@ pub enum StmtKind {
 #[derive(Clone, Debug)]
 pub enum ForIter {
     /// `lo..hi` (exclusive) or `lo..=hi` (inclusive)
-    Range { lo: Expr, hi: Expr, inclusive: bool },
+    Range {
+        lo: Expr,
+        hi: Expr,
+        inclusive: bool,
+    },
     Expr(Expr),
 }
 
@@ -206,9 +229,19 @@ pub enum ExprKind {
     Name(String),
     Unary(UnOp, Box<Expr>),
     Binary(BinOp, Box<Expr>, Box<Expr>),
-    Call { callee: Box<Expr>, args: Vec<Arg> },
-    Field { base: Box<Expr>, name: String, name_span: Span },
-    Index { base: Box<Expr>, index: Box<Expr> },
+    Call {
+        callee: Box<Expr>,
+        args: Vec<Arg>,
+    },
+    Field {
+        base: Box<Expr>,
+        name: String,
+        name_span: Span,
+    },
+    Index {
+        base: Box<Expr>,
+        index: Box<Expr>,
+    },
     List(Vec<Expr>),
     /// `expr?` — propagate an error.
     Try(Box<Expr>),
