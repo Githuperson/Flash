@@ -281,6 +281,8 @@ pub fn find_runtime(release: bool) -> Result<PathBuf, String> {
     let mut candidates = vec![];
     if let Some(d) = exe_dir() {
         candidates.push(d.join(name));
+        // installed layout: <home>/bin/flash and <home>/lib/libflash_rt.a
+        candidates.push(d.join("../lib").join(name));
         if let Some(parent) = d.parent() {
             // tests run from target/debug/deps
             candidates.push(parent.join(name));

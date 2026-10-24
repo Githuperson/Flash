@@ -48,6 +48,23 @@ for i in 0..3:                  # 0, 1, 2   (the upper bound is excluded; use 0.
 Tuples, maps, user generics/traits, methods, closures, threads, `unsafe`, strings/structs across `extern fn`, process-isolated plugins, per-module incremental compilation (only whole-program caching exists), an LSP server,
 a package registry, Windows linking. The full list is in [LANGUAGE_SPEC.md §16](LANGUAGE_SPEC.md#16-not-implemented-yet) and [ARCHITECTURE.md §9](ARCHITECTURE.md#9-known-limitations--roadmap).
 
+## Install
+
+```bash
+curl -sSf https://raw.githubusercontent.com/Githuperson/Flash/main/install.sh | sh
+export PATH="$HOME/.flash/bin:$PATH"      # add to ~/.zshrc or ~/.bashrc
+flash --version
+```
+
+The script downloads the prebuilt archive for your platform (Linux x86-64, macOS Apple Silicon, macOS Intel) from the latest GitHub release, verifies its SHA-256, and unpacks it into `~/.flash`
+(`FLASH_HOME=dir` to change). If no release exists yet it builds from source instead, which needs Rust ([rustup.rs](https://rustup.rs)). Compiling Flash programs always needs a C compiler (`cc`) for linking.
+`flash` finds its runtime library and standard library relative to its own location, so no environment variables are needed. `./uninstall.sh` removes everything.
+
+* **From a checkout:** `./install.sh` builds from source (`FLASH_FROM_SOURCE=1` forces that for the curl form too).
+* **Publishing a release (maintainers):** `git tag v0.1.0 && git push origin v0.1.0` runs `.github/workflows/release.yml`, which builds the three archives with `scripts/package.sh` and attaches them to a GitHub release.
+  **That workflow has never run**, and the one-line installer only works once this code is on `main` and a release exists; the Linux archive and the download/checksum/unpack path were tested locally against a local web server, macOS archives were not.
+* The plugin examples are not part of the archive; build them from a checkout (below).
+
 ## Build
 
 Requirements: a Rust toolchain (tested with 1.97; any recent stable should work) and a C compiler/linker reachable as `cc`. Optional: `clang` for `--backend llvm`, `c++`/`make` for the C++ plugin, Python 3 for the benchmarks.
