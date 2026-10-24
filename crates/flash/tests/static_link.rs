@@ -4,6 +4,15 @@ mod common;
 use common::*;
 use std::process::Command;
 
+/// Linker flag that lets the no_std Rust library's panic handler coexist with the runtime's.
+fn dup_flag() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "-Wl,-allow_duplicate_symbols"
+    } else {
+        "-Wl,--allow-multiple-definition"
+    }
+}
+
 fn build_libs(tag: &str) -> std::path::PathBuf {
     let dir = scratch_dir(tag);
     let src = repo_root().join("examples/static_link");
@@ -72,7 +81,7 @@ fn c_cpp_and_rust_static_libraries_link_and_run() {
         let dir = scratch_dir("static-rs");
         let p = dir.join("rs.flash");
         std::fs::write(&p, "extern fn rs_square(x: Int) -> Int\nextern fn rs_clamp(x: Int, lo: Int, hi: Int) -> Int\nsay(rs_square(12), rs_clamp(50, 0, 10), rs_clamp(-5, 0, 10))\n").unwrap();
-        let (b, o) = run(&p, &["--link", r.as_str(), "-Wl,--allow-multiple-definition"], "static-rs-run");
+        let (b, o) = run(&p, &["--link", r.as_str(), dup_flag()], "static-rs-run");
         assert!(b.status.success(), "{}", text(&b.stderr));
         assert_eq!(text(&o.unwrap().stdout), "144 10 0\n");
     }
