@@ -50,22 +50,20 @@ a package registry, Windows linking. The full list is in [LANGUAGE_SPEC.md §16]
 
 ## Install
 
-Like `rustup`, but it builds from source (there are no prebuilt binaries yet). You need Rust ([rustup.rs](https://rustup.rs)) and a C compiler (`cc`).
-
 ```bash
-./install.sh                       # from a checkout; installs to ~/.flash (override with FLASH_HOME=dir)
-export PATH="$HOME/.flash/bin:$PATH"   # add to ~/.zshrc or ~/.bashrc
+curl -sSf https://raw.githubusercontent.com/Githuperson/Flash/main/install.sh | sh
+export PATH="$HOME/.flash/bin:$PATH"      # add to ~/.zshrc or ~/.bashrc
 flash --version
 ```
 
-Or in one line, once this code is on the repository's `main` branch (until then use `FLASH_REF=<branch>`):
+The script downloads the prebuilt archive for your platform (Linux x86-64, macOS Apple Silicon, macOS Intel) from the latest GitHub release, verifies its SHA-256, and unpacks it into `~/.flash`
+(`FLASH_HOME=dir` to change). If no release exists yet it builds from source instead, which needs Rust ([rustup.rs](https://rustup.rs)). Compiling Flash programs always needs a C compiler (`cc`) for linking.
+`flash` finds its runtime library and standard library relative to its own location, so no environment variables are needed. `./uninstall.sh` removes everything.
 
-```bash
-curl -sSf https://raw.githubusercontent.com/Githuperson/Flash/main/install.sh | sh
-```
-
-This installs `flash`, `flashpkg`, the runtime library (`lib/libflash_rt.a`), the standard library and the plugin headers; `flash` finds them relative to its own location, so no environment variables are needed.
-`./uninstall.sh` removes everything. The plugin examples are not installed; build them from a checkout (below).
+* **From a checkout:** `./install.sh` builds from source (`FLASH_FROM_SOURCE=1` forces that for the curl form too).
+* **Publishing a release (maintainers):** `git tag v0.1.0 && git push origin v0.1.0` runs `.github/workflows/release.yml`, which builds the three archives with `scripts/package.sh` and attaches them to a GitHub release.
+  **That workflow has never run**, and the one-line installer only works once this code is on `main` and a release exists; the Linux archive and the download/checksum/unpack path were tested locally against a local web server, macOS archives were not.
+* The plugin examples are not part of the archive; build them from a checkout (below).
 
 ## Build
 

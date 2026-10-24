@@ -1,0 +1,31 @@
+# Builds binary archives when a version tag is pushed:   git tag v0.1.0 && git push origin v0.1.0
+# NOTE: written but never run by the author; first run happens on the first tag.
+name: release
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: write
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - { os: ubuntu-latest, target: linux-x86_64 }
+          - { os: macos-14,      target: macos-aarch64 }
+          - { os: macos-13,      target: macos-x86_64 }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: scripts/package.sh ${{ matrix.target }}
+      - uses: actions/upload-artifact@v4
+        with: { name: "${{ matrix.target }}", path: dist/* }
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { path: dist, merge-multiple: true }
+      - uses: softprops/action-gh-release@v2
+        with: { files: dist/*, generate_release_notes: true }
