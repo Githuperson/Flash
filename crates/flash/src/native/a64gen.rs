@@ -13,6 +13,7 @@
 
 use crate::ir::*;
 
+use super::magic;
 use super::a64::*;
 use super::regalloc::*;
 use super::Target;
@@ -759,6 +760,15 @@ impl<'m> Cg<'m> {
         let signed = matches!(op, BinOp::SDiv | BinOp::SRem);
         let rem = matches!(op, BinOp::SRem | BinOp::URem);
         let mut ra = self.in_reg(self.src(st, a), T0);
+        if let Src::I(dv) = self.src(st, b) {
+            if signed && ty != Ty::I64 {
+                self.a.sxt(bits_of(ty), T0, ra);
+                ra = T0;
+            }
+            if self.divrem_const(st, dst, ty, signed, rem, ra, dv) {
+                return;
+            }
+        }
         let mut rb = self.in_reg(self.src(st, b), T1);
         if signed && ty != Ty::I64 {
             // narrow signed values are zero-extended in registers: sign-extend, divide at 64 bits
@@ -783,6 +793,108 @@ impl<'m> Cg<'m> {
             self.norm(rd, ty);
         }
         self.commit(st, dst, rd);
+    }
+
+    /// Division or remainder by a constant without a divide instruction (multiplication by a
+    /// reciprocal, see `magic.rs`). `ra` holds the dividend sign- or zero-extended to 64 bits and
+    /// must not be a scratch register other than T0. Returns false when the divisor needs the
+    /// hardware instruction (zero, one, minus one).
+    #[allow(clippy::too_many_arguments)]
+    fn divrem_const(&mut self, st: &FnState, dst: VReg, ty: Ty, signed: bool, rem: bool, ra: Reg, dv: i64) -> bool {
+        let bits = bits_of(ty);
+        let d_s: i64 = match ty {
+            Ty::I8 => dv as u8 as i8 as i64,
+            Ty::I16 => dv as u16 as i16 as i64,
+            Ty::I32 => dv as u32 as i32 as i64,
+            _ => dv,
+        };
+        let d_u: u64 = if bits >= 64 { dv as u64 } else { dv as u64 & ((1u64 << bits) - 1) };
+        if signed && (d_s == 0 || d_s == 1 || d_s == -1) || !signed && (d_u == 0 || d_u == 1) {
+            return false;
+        }
+        let rd = self.def_reg(st, dst);
+        // q ends up in `q`; `o` is the other scratch register
+        let (mut q, mut o) = (T2, T1);
+        if signed {
+            let ad = d_s.unsigned_abs();
+            if ad.is_power_of_two() {
+                let k = ad.trailing_zeros();
+                // t = a + (a < 0 ? 2^k - 1 : 0)
+                self.a.asr_imm(q, ra, 63);
+                self.a.lsr_imm(q, q, 64 - k);
+                self.a.add(q, q, ra);
+                if rem {
+                    self.a.mov_imm(o, -(1i64 << k));
+                    self.a.and(q, q, o);
+                    self.a.sub(rd, ra, q);
+                    if ty != Ty::I64 {
+                        self.norm(rd, ty);
+                    }
+                    self.commit(st, dst, rd);
+                    return true;
+                }
+                self.a.asr_imm(q, q, k);
+                if d_s < 0 {
+                    self.a.neg(q, q);
+                }
+            } else {
+                let (m, s) = magic::signed(d_s);
+                self.a.mov_imm(o, m);
+                self.a.smulh(q, ra, o);
+                if d_s > 0 && m < 0 {
+                    self.a.add(q, q, ra);
+                }
+                if d_s < 0 && m > 0 {
+                    self.a.sub(q, q, ra);
+                }
+                if s > 0 {
+                    self.a.asr_imm(q, q, s);
+                }
+                self.a.lsr_imm(o, q, 63);
+                self.a.add(q, q, o);
+            }
+        } else if d_u.is_power_of_two() {
+            let k = d_u.trailing_zeros();
+            if rem {
+                if !self.a.and_imm(rd, ra, d_u - 1) {
+                    self.a.mov_imm(o, (d_u - 1) as i64);
+                    self.a.and(rd, ra, o);
+                }
+            } else {
+                self.a.lsr_imm(rd, ra, k);
+            }
+            self.commit(st, dst, rd);
+            return true;
+        } else {
+            let (m, add, s) = magic::unsigned(d_u);
+            self.a.mov_imm(o, m as i64);
+            self.a.umulh(q, ra, o);
+            if !add {
+                if s > 0 {
+                    self.a.lsr_imm(q, q, s);
+                }
+            } else {
+                self.a.sub(o, ra, q);
+                self.a.lsr_imm(o, o, 1);
+                self.a.add(o, o, q);
+                if s > 1 {
+                    self.a.lsr_imm(o, o, s - 1);
+                }
+                std::mem::swap(&mut q, &mut o);
+            }
+        }
+        if rem {
+            let dreg = o;
+            self.a.mov_imm(dreg, if signed { d_s } else { d_u as i64 });
+            self.a.msub(rd, q, dreg, ra);
+        } else {
+            self.a.mov(rd, q);
+        }
+        if signed && ty != Ty::I64 {
+            self.norm(rd, ty);
+        }
+        self.commit(st, dst, rd);
+        true
     }
 
     fn shift(&mut self, st: &FnState, dst: VReg, op: BinOp, a: VReg, b: VReg) {

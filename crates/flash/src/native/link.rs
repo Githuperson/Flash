@@ -97,7 +97,7 @@ pub fn link(mut user: Module, mut rt: Module, release: bool) -> Result<Module, S
     crate::opt::remove_unused_functions(&mut user);
     crate::opt::optimise(&mut user, release && std::env::var_os("FLASH_DEBUG_NOINLINE").is_none());
     if let Some(name) = std::env::var_os("FLASH_DEBUG_DUMP") {
-        for f in user.funcs.iter().filter(|f| f.name == name.to_string_lossy()) {
+        for f in user.funcs.iter().filter(|f| name == "*" || f.name == name.to_string_lossy()) {
             eprintln!("{}", Module { funcs: vec![f.clone()], ..Default::default() });
         }
     }
