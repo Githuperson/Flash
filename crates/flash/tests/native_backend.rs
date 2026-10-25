@@ -12,7 +12,19 @@ fn run_elf(bytes: &[u8], name: &str) -> (i32, String) {
     std::fs::write(&path, bytes).unwrap();
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
-    let out = Command::new(&path).output().unwrap();
+    // Another test thread may fork while this file is still open for writing; the child holds the
+    // descriptor until it execs, and Linux refuses to run such a file ("Text file busy"). Retry.
+    let mut tries = 0;
+    let out = loop {
+        match Command::new(&path).output() {
+            Ok(o) => break o,
+            Err(e) if e.raw_os_error() == Some(26) && tries < 50 => {
+                tries += 1;
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            Err(e) => panic!("cannot run {}: {}", path.display(), e),
+        }
+    };
     (out.status.code().unwrap_or(-1), String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
