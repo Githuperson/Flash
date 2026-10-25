@@ -49,8 +49,6 @@ pub struct Allocation {
     pub order: Vec<usize>,
     pub loc: Vec<Loc>,
     pub consts: Vec<Option<Const>>,
-    /// Number of uses (instruction operands and terminators) of each vreg.
-    pub uses: Vec<u32>,
     pub saved_int: Vec<Reg>,
     pub saved_flt: Vec<Reg>,
     pub nslots: u32,
@@ -503,7 +501,7 @@ pub fn allocate(f: &Function) -> Allocation {
             fuse_cmp[*b] = dst == cond && consts[*dst as usize].is_none() && !live_out[bi].get(*dst as usize);
         }
     }
-    Allocation { order, loc, consts, uses, saved_int, saved_flt, nslots, fuse_cmp }
+    Allocation { order, loc, consts, saved_int, saved_flt, nslots, fuse_cmp }
 }
 
 /// Constants are kept in their canonical in-register form: narrow integers zero-extended.

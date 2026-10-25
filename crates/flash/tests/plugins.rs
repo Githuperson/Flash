@@ -1,6 +1,8 @@
 //! Plugin integration: real native calls into a Rust cdylib and a C++ shared library, plus ABI
 //! validation failures. These tests compile native code with `cargo` and `c++`.
 
+#![cfg(feature = "legacy-backends")]
+
 mod common;
 use common::*;
 use std::path::{Path, PathBuf};

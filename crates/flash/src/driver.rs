@@ -275,163 +275,170 @@ pub fn exe_suffix(target: Option<&str>) -> &'static str {
     }
 }
 
-fn exe_dir() -> Option<PathBuf> {
-    std::env::current_exe().ok().and_then(|e| e.parent().map(|p| p.to_path_buf()))
-}
-
-fn workspace_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
-}
-
-fn runtime_lib_name() -> &'static str {
-    if cfg!(windows) {
-        "flash_rt.lib"
-    } else {
-        "libflash_rt.a"
+#[cfg(feature = "legacy-backends")]
+mod legacy_link {
+    use super::*;
+    pub fn exe_dir() -> Option<PathBuf> {
+        std::env::current_exe().ok().and_then(|e| e.parent().map(|p| p.to_path_buf()))
     }
-}
 
-/// Locate the runtime static library, building it from source in a development checkout if needed.
-pub fn find_runtime(release: bool) -> Result<PathBuf, String> {
-    if let Some(p) = std::env::var_os("FLASH_RT_LIB") {
-        return Ok(PathBuf::from(p));
+    pub fn workspace_root() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
     }
-    let name = runtime_lib_name();
-    let mut candidates = vec![];
-    if let Some(d) = exe_dir() {
-        candidates.push(d.join(name));
-        // installed layout: <home>/bin/flash and <home>/lib/libflash_rt.a
-        candidates.push(d.join("../lib").join(name));
-        if let Some(parent) = d.parent() {
-            // tests run from target/debug/deps
-            candidates.push(parent.join(name));
+
+    pub fn runtime_lib_name() -> &'static str {
+        if cfg!(windows) {
+            "flash_rt.lib"
+        } else {
+            "libflash_rt.a"
         }
     }
-    if let Some(c) = candidates.iter().find(|c| c.is_file()) {
-        return Ok(c.clone());
-    }
-    // Development checkout: build the runtime crate on demand.
-    let root = workspace_root();
-    if root.join("crates/flash-rt/Cargo.toml").is_file() {
-        let mut cmd = Command::new("cargo");
-        cmd.current_dir(&root).args(["build", "-p", "flash-rt", "--quiet"]);
-        if release {
-            cmd.arg("--release");
-        }
-        let status = cmd.status().map_err(|e| format!("cannot run cargo to build the runtime: {}", e))?;
-        if !status.success() {
-            return Err("building the Flash runtime (crates/flash-rt) failed".into());
-        }
-        let target_dir = std::env::var_os("CARGO_TARGET_DIR").map(PathBuf::from).unwrap_or_else(|| root.join("target"));
-        let p = target_dir.join(if release { "release" } else { "debug" }).join(name);
-        if p.is_file() {
-            return Ok(p);
-        }
-    }
-    Err(format!("cannot find the Flash runtime library '{}'. Run `cargo build --workspace` first, or set FLASH_RT_LIB.", name))
-}
 
-fn stub_name() -> &'static str {
-    if cfg!(windows) {
-        "flash-stub.exe"
-    } else {
-        "flash-stub"
-    }
-}
-
-/// Locate the prebuilt stub executable (next to `flash`, in `../lib`, or built on demand in a dev checkout).
-pub fn find_stub(release: bool) -> Option<PathBuf> {
-    if let Some(p) = std::env::var_os("FLASH_STUB") {
-        return Some(PathBuf::from(p));
-    }
-    let name = stub_name();
-    if let Some(d) = exe_dir() {
-        for c in [d.join(name), d.join("../lib").join(name), d.parent().map(|p| p.join(name)).unwrap_or_default()] {
-            if c.is_file() {
-                return Some(c);
+    /// Locate the runtime static library, building it from source in a development checkout if needed.
+    pub fn find_runtime(release: bool) -> Result<PathBuf, String> {
+        if let Some(p) = std::env::var_os("FLASH_RT_LIB") {
+            return Ok(PathBuf::from(p));
+        }
+        let name = runtime_lib_name();
+        let mut candidates = vec![];
+        if let Some(d) = exe_dir() {
+            candidates.push(d.join(name));
+            // installed layout: <home>/bin/flash and <home>/lib/libflash_rt.a
+            candidates.push(d.join("../lib").join(name));
+            if let Some(parent) = d.parent() {
+                // tests run from target/debug/deps
+                candidates.push(parent.join(name));
             }
         }
-    }
-    let root = workspace_root();
-    if root.join("crates/flash-rt/Cargo.toml").is_file() {
-        let mut cmd = Command::new("cargo");
-        cmd.current_dir(&root).args(["build", "-p", "flash-rt", "--bin", "flash-stub", "--quiet"]);
-        if release {
-            cmd.arg("--release");
+        if let Some(c) = candidates.iter().find(|c| c.is_file()) {
+            return Ok(c.clone());
         }
-        if cmd.status().map_or(false, |s| s.success()) {
+        // Development checkout: build the runtime crate on demand.
+        let root = workspace_root();
+        if root.join("crates/flash-rt/Cargo.toml").is_file() {
+            let mut cmd = Command::new("cargo");
+            cmd.current_dir(&root).args(["build", "-p", "flash-rt", "--quiet"]);
+            if release {
+                cmd.arg("--release");
+            }
+            let status = cmd.status().map_err(|e| format!("cannot run cargo to build the runtime: {}", e))?;
+            if !status.success() {
+                return Err("building the Flash runtime (crates/flash-rt) failed".into());
+            }
             let target_dir = std::env::var_os("CARGO_TARGET_DIR").map(PathBuf::from).unwrap_or_else(|| root.join("target"));
             let p = target_dir.join(if release { "release" } else { "debug" }).join(name);
             if p.is_file() {
-                return Some(p);
+                return Ok(p);
             }
         }
+        Err(format!("cannot find the Flash runtime library '{}'. Run `cargo build --workspace` first, or set FLASH_RT_LIB.", name))
     }
-    None
-}
 
-/// Can this build use the built-in linker?
-fn builtin_possible(opts: &BuildOptions, program: &Program) -> Result<(), &'static str> {
-    if !(cfg!(all(target_os = "linux", target_arch = "x86_64"))) {
-        return Err("the built-in linker currently supports Linux x86-64 only");
-    }
-    if opts.target.is_some() || opts.backend != crate::codegen::Backend::Cranelift {
-        return Err("the built-in linker needs the Cranelift backend and the host target");
-    }
-    if !opts.link_args.is_empty() || !program.externs.is_empty() {
-        return Err("`extern fn` and --link need the system linker");
-    }
-    Ok(())
-}
-
-/// Write `[stub][object][len][magic]` to `out`.
-fn link_builtin(obj: &[u8], out: &Path, release: bool) -> Result<(), String> {
-    let stub = find_stub(release).ok_or("cannot find flash-stub (run `cargo build --workspace`, or set FLASH_STUB)")?;
-    let mut bytes = std::fs::read(&stub).map_err(|e| format!("cannot read {}: {}", stub.display(), e))?;
-    bytes.extend_from_slice(obj);
-    bytes.extend_from_slice(&(obj.len() as u64).to_le_bytes());
-    bytes.extend_from_slice(b"FLASHPAY");
-    let _ = std::fs::remove_file(out);
-    std::fs::write(out, &bytes).map_err(|e| format!("cannot write {}: {}", out.display(), e))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(out, std::fs::Permissions::from_mode(0o755));
-    }
-    Ok(())
-}
-
-pub fn link(obj: &Path, out: &Path, opts: &BuildOptions) -> Result<(), String> {
-    let rt = find_runtime(opts.release)?;
-    let cc = std::env::var("FLASH_CC").or_else(|_| std::env::var("CC")).unwrap_or_else(|_| "cc".into());
-    let mut cmd = Command::new(&cc);
-    cmd.arg(obj).arg(&rt).arg("-o").arg(out);
-    if cfg!(target_os = "linux") {
-        cmd.args(["-lpthread", "-ldl", "-lm", "-Wl,--gc-sections"]);
-        if opts.release {
-            cmd.arg("-s");
-        }
-    } else if cfg!(target_os = "macos") {
-        cmd.args(["-lm", "-framework", "Security"]);
-        if opts.release {
-            cmd.arg("-Wl,-dead_strip");
-        }
-    }
-    for a in &opts.link_args {
-        cmd.arg(a);
-    }
-    let output = cmd.output().map_err(|e| format!("cannot run the linker '{}': {} (install a C compiler or set FLASH_CC)", cc, e))?;
-    if !output.status.success() {
-        let err = String::from_utf8_lossy(&output.stderr);
-        let hint = if err.contains("undefined reference") || err.contains("Undefined symbols") {
-            "\nHint: a function declared with `extern fn` was not found. Pass the library that defines it, for example `--link path/to/libname.a` (or -lname -Ldir), and check the function name.\n"
+    pub fn stub_name() -> &'static str {
+        if cfg!(windows) {
+            "flash-stub.exe"
         } else {
-            ""
-        };
-        return Err(format!("linking failed:\n{}{}", err, hint));
+            "flash-stub"
+        }
     }
-    Ok(())
+
+    /// Locate the prebuilt stub executable (next to `flash`, in `../lib`, or built on demand in a dev checkout).
+    pub fn find_stub(release: bool) -> Option<PathBuf> {
+        if let Some(p) = std::env::var_os("FLASH_STUB") {
+            return Some(PathBuf::from(p));
+        }
+        let name = stub_name();
+        if let Some(d) = exe_dir() {
+            for c in [d.join(name), d.join("../lib").join(name), d.parent().map(|p| p.join(name)).unwrap_or_default()] {
+                if c.is_file() {
+                    return Some(c);
+                }
+            }
+        }
+        let root = workspace_root();
+        if root.join("crates/flash-rt/Cargo.toml").is_file() {
+            let mut cmd = Command::new("cargo");
+            cmd.current_dir(&root).args(["build", "-p", "flash-rt", "--bin", "flash-stub", "--quiet"]);
+            if release {
+                cmd.arg("--release");
+            }
+            if cmd.status().map_or(false, |s| s.success()) {
+                let target_dir = std::env::var_os("CARGO_TARGET_DIR").map(PathBuf::from).unwrap_or_else(|| root.join("target"));
+                let p = target_dir.join(if release { "release" } else { "debug" }).join(name);
+                if p.is_file() {
+                    return Some(p);
+                }
+            }
+        }
+        None
+    }
+
+    /// Can this build use the built-in linker?
+    pub fn builtin_possible(opts: &BuildOptions, program: &Program) -> Result<(), &'static str> {
+        if !(cfg!(all(target_os = "linux", target_arch = "x86_64"))) {
+            return Err("the built-in linker currently supports Linux x86-64 only");
+        }
+        if opts.target.is_some() || opts.backend != crate::codegen::Backend::Cranelift {
+            return Err("the built-in linker needs the Cranelift backend and the host target");
+        }
+        if !opts.link_args.is_empty() || !program.externs.is_empty() {
+            return Err("`extern fn` and --link need the system linker");
+        }
+        Ok(())
+    }
+
+    /// Write `[stub][object][len][magic]` to `out`.
+    pub fn link_builtin(obj: &[u8], out: &Path, release: bool) -> Result<(), String> {
+        let stub = find_stub(release).ok_or("cannot find flash-stub (run `cargo build --workspace`, or set FLASH_STUB)")?;
+        let mut bytes = std::fs::read(&stub).map_err(|e| format!("cannot read {}: {}", stub.display(), e))?;
+        bytes.extend_from_slice(obj);
+        bytes.extend_from_slice(&(obj.len() as u64).to_le_bytes());
+        bytes.extend_from_slice(b"FLASHPAY");
+        let _ = std::fs::remove_file(out);
+        std::fs::write(out, &bytes).map_err(|e| format!("cannot write {}: {}", out.display(), e))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(out, std::fs::Permissions::from_mode(0o755));
+        }
+        Ok(())
+    }
+
+    pub fn link(obj: &Path, out: &Path, opts: &BuildOptions) -> Result<(), String> {
+        let rt = find_runtime(opts.release)?;
+        let cc = std::env::var("FLASH_CC").or_else(|_| std::env::var("CC")).unwrap_or_else(|_| "cc".into());
+        let mut cmd = Command::new(&cc);
+        cmd.arg(obj).arg(&rt).arg("-o").arg(out);
+        if cfg!(target_os = "linux") {
+            cmd.args(["-lpthread", "-ldl", "-lm", "-Wl,--gc-sections"]);
+            if opts.release {
+                cmd.arg("-s");
+            }
+        } else if cfg!(target_os = "macos") {
+            cmd.args(["-lm", "-framework", "Security"]);
+            if opts.release {
+                cmd.arg("-Wl,-dead_strip");
+            }
+        }
+        for a in &opts.link_args {
+            cmd.arg(a);
+        }
+        let output = cmd.output().map_err(|e| format!("cannot run the linker '{}': {} (install a C compiler or set FLASH_CC)", cc, e))?;
+        if !output.status.success() {
+            let err = String::from_utf8_lossy(&output.stderr);
+            let hint = if err.contains("undefined reference") || err.contains("Undefined symbols") {
+                "\nHint: a function declared with `extern fn` was not found. Pass the library that defines it, for example `--link path/to/libname.a` (or -lname -Ldir), and check the function name.\n"
+            } else {
+                ""
+            };
+            return Err(format!("linking failed:\n{}{}", err, hint));
+        }
+        Ok(())
+    }
+
 }
+#[cfg(feature = "legacy-backends")]
+use legacy_link::*;
 
 pub fn default_output(src: &Path, opts: &BuildOptions) -> PathBuf {
     if let Some(o) = &opts.output {
@@ -492,6 +499,7 @@ fn cache_key(fe: &Frontend, opts: &BuildOptions) -> String {
     let mut h = Sha256::new();
     h.update(crate::VERSION.as_bytes());
     h.update(file_stamp(&std::env::current_exe().unwrap_or_default()).as_bytes());
+    #[cfg(feature = "legacy-backends")]
     if let Ok(rt) = find_runtime(opts.release) {
         h.update(rt.to_string_lossy().as_bytes());
         h.update(file_stamp(&rt).as_bytes());
@@ -515,6 +523,15 @@ fn cache_key(fe: &Frontend, opts: &BuildOptions) -> String {
     h.finalize().iter().map(|b| format!("{:02x}", b)).collect()
 }
 
+#[cfg(feature = "legacy-backends")]
+fn legacy_llvm_available(opts: &BuildOptions) -> bool {
+    opts.release && opts.target.is_none() && crate::llvm::find_clang().is_some()
+}
+#[cfg(not(feature = "legacy-backends"))]
+fn legacy_llvm_available(_: &BuildOptions) -> bool {
+    false
+}
+
 /// Turn `Backend::Auto` into a concrete backend. Flash's own native back end is used whenever it
 /// can handle the program (Linux x86-64 host, no C libraries, no plugins); otherwise the optional
 /// legacy back ends are used: LLVM for release builds when clang exists, else Cranelift.
@@ -530,7 +547,7 @@ fn resolve_backend(opts: &BuildOptions, program: &Program) -> crate::codegen::Ba
                 && program.plugins.is_empty();
             if native_ok {
                 Backend::Native
-            } else if opts.release && opts.target.is_none() && crate::llvm::find_clang().is_some() {
+            } else if legacy_llvm_available(opts) {
                 Backend::Llvm
             } else {
                 Backend::Cranelift
@@ -557,9 +574,22 @@ pub fn build(src: &Path, opts: &BuildOptions) -> Result<(PathBuf, BuildTimings),
             return Ok((out, BuildTimings { frontend: t, backend: Default::default(), link: Default::default(), cached: true }));
         }
     }
-    if opts.backend == crate::codegen::Backend::Native && !opts.emit_ir && !opts.emit_obj_only {
+    if opts.backend == crate::codegen::Backend::Native && !opts.emit_obj_only {
         return build_native(&fe, opts, &out, cache_entry.as_deref(), t0);
     }
+    build_legacy(&fe, opts, &out, cache_entry.as_deref(), t0)
+}
+
+#[cfg(feature = "legacy-backends")]
+fn build_legacy(
+    fe: &Frontend,
+    opts: &BuildOptions,
+    out: &Path,
+    cache_entry: Option<&Path>,
+    t0: std::time::Instant,
+) -> Result<(PathBuf, BuildTimings), String> {
+    let out = out.to_path_buf();
+    let cache_entry = cache_entry.map(|p| p.to_path_buf());
     let module = lower_and_optimise(&fe.program, opts.release);
     if opts.emit_ir {
         println!("{}", module);
@@ -617,6 +647,23 @@ pub fn build(src: &Path, opts: &BuildOptions) -> Result<(PathBuf, BuildTimings),
     Ok((out, BuildTimings { frontend: t1 - t0, backend: t2 - t1, link: t3 - t2, cached: false }))
 }
 
+#[cfg(not(feature = "legacy-backends"))]
+fn build_legacy(
+    _fe: &Frontend,
+    opts: &BuildOptions,
+    _out: &Path,
+    _cache_entry: Option<&Path>,
+    _t0: std::time::Instant,
+) -> Result<(PathBuf, BuildTimings), String> {
+    Err(format!(
+        "this build of Flash contains only the native back end (Linux x86-64, no `extern fn`, no plugins){}.\nThe optional Cranelift/LLVM back ends are compiled in with `cargo build --features legacy-backends`.\n",
+        match opts.target.as_deref() {
+            Some(t) => format!(", so it cannot target '{}'", t),
+            None => String::new(),
+        }
+    ))
+}
+
 /// Build with Flash's own back end: lower, link with the Flash-language runtime, emit an ELF file.
 fn build_native(
     fe: &Frontend,
@@ -632,6 +679,9 @@ fn build_native(
         return Err("the native back end cannot link C libraries or plugins; use --backend cranelift or llvm for `extern fn`, --link and plugins\n".into());
     }
     let user = crate::lower::lower(&fe.program);
+    if opts.emit_ir {
+        println!("{}", user);
+    }
     let rt = crate::native::link::lower_runtime().map_err(|e| format!("internal error in the runtime library:\n{}", e))?;
     let t1 = std::time::Instant::now();
     let module = crate::native::link::link(user, rt, opts.release).map_err(|e| format!("{}\n", e))?;

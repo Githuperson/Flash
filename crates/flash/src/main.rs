@@ -150,8 +150,17 @@ fn main() -> ExitCode {
             match driver::frontend(&f, None) {
                 Ok(fe) => {
                     let m = driver::lower_and_optimise(&fe.program, opts.release);
-                    print!("{}", flashc::llvm::emit_ir(&m));
-                    ExitCode::SUCCESS
+                    #[cfg(feature = "legacy-backends")]
+                    {
+                        print!("{}", flashc::llvm::emit_ir(&m));
+                        ExitCode::SUCCESS
+                    }
+                    #[cfg(not(feature = "legacy-backends"))]
+                    {
+                        let _ = m;
+                        eprintln!("--emit-llvm needs a build with --features legacy-backends");
+                        ExitCode::from(2)
+                    }
                 }
                 Err(e) => {
                     eprint!("{}", e);

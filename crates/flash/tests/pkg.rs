@@ -131,6 +131,7 @@ fn native_package_requirements_are_enforced() {
     assert!(marker.exists(), "build command should run when explicitly allowed");
 }
 
+#[cfg(feature = "legacy-backends")]
 #[test]
 fn rust_plugin_package_from_the_repository_works_through_flashpkg() {
     let root = repo_root();

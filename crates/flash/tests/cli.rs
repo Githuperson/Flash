@@ -148,6 +148,7 @@ fn flash_test_runs_test_functions_and_reports_failures() {
     assert!(out.contains("1 passed; 1 failed"));
 }
 
+#[cfg(feature = "legacy-backends")]
 #[test]
 fn cross_compilation_emits_objects_for_other_platforms() {
     // Linking needs a target toolchain, but the code generator can produce objects for each target.
@@ -221,7 +222,7 @@ fn build_cache_reuses_executables_and_invalidates_on_change() {
 #[test]
 fn programs_build_and_run_without_any_c_compiler_or_linker() {
     if !cfg!(all(target_os = "linux", target_arch = "x86_64")) {
-        eprintln!("note: the built-in linker is Linux x86-64 only; skipping");
+        eprintln!("note: the native back end is Linux x86-64 only; skipping");
         return;
     }
     let dir = scratch_dir("cli-nocc");
@@ -240,18 +241,21 @@ fn programs_build_and_run_without_any_c_compiler_or_linker() {
     let expected = std::fs::read_to_string(repo_root().join("tests/programs/ownership_flow.expected")).unwrap();
     assert_eq!(text(&run.stdout), expected);
     assert!(text(&run.stderr).contains("live allocations at exit: 0"));
+    #[cfg(feature = "legacy-backends")]
+    {
     // forcing the system linker with a missing compiler fails clearly; forcing builtin with --link is refused
-    let sys = Command::new(flash_bin())
-        .args(["build", src.to_str().unwrap(), "-o", exe.to_str().unwrap(), "--no-cache", "--linker", "system"])
-        .env("FLASH_CC", "/nonexistent/cc")
-        .env("FLASH_CACHE_DIR", test_cache_dir())
-        .output()
-        .unwrap();
-    assert_eq!(sys.status.code(), Some(1));
-    assert!(text(&sys.stderr).contains("cannot run the linker"), "{}", text(&sys.stderr));
-    let bad = flash(&["build", src.to_str().unwrap(), "-o", exe.to_str().unwrap(), "--no-cache", "--linker", "builtin", "--link", "x.a"]);
-    assert_eq!(bad.status.code(), Some(1));
-    assert!(text(&bad.stderr).contains("need the system linker"), "{}", text(&bad.stderr));
+        let sys = Command::new(flash_bin())
+            .args(["build", src.to_str().unwrap(), "-o", exe.to_str().unwrap(), "--no-cache", "--linker", "system"])
+            .env("FLASH_CC", "/nonexistent/cc")
+            .env("FLASH_CACHE_DIR", test_cache_dir())
+            .output()
+            .unwrap();
+        assert_eq!(sys.status.code(), Some(1));
+        assert!(text(&sys.stderr).contains("cannot run the linker"), "{}", text(&sys.stderr));
+        let bad = flash(&["build", src.to_str().unwrap(), "-o", exe.to_str().unwrap(), "--no-cache", "--linker", "builtin", "--link", "x.a"]);
+        assert_eq!(bad.status.code(), Some(1));
+        assert!(text(&bad.stderr).contains("need the system linker"), "{}", text(&bad.stderr));
+    }
 }
 
 #[test]

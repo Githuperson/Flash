@@ -17,7 +17,6 @@ pub const RDI: Reg = 7;
 pub const R8: Reg = 8;
 pub const R9: Reg = 9;
 pub const R10: Reg = 10;
-pub const R11: Reg = 11;
 pub const R12: Reg = 12;
 pub const R13: Reg = 13;
 pub const R14: Reg = 14;
@@ -140,10 +139,6 @@ impl Asm {
     pub fn bind(&mut self, l: Label) {
         debug_assert!(self.labels[l].is_none(), "label bound twice");
         self.labels[l] = Some(self.buf.len());
-    }
-
-    pub fn label_pos(&self, l: Label) -> Option<usize> {
-        self.labels[l]
     }
 
     /// Patch all label references. Every referenced label must be bound.
@@ -513,12 +508,6 @@ impl Asm {
         at
     }
 
-    pub fn call_label(&mut self, l: Label) {
-        self.b(0xE8);
-        self.fixups.push((self.pos(), l));
-        self.d(0);
-    }
-
     pub fn ret(&mut self) {
         self.b(0xC3);
     }
@@ -603,12 +592,6 @@ impl Asm {
     /// cvttsd2si r64, xmm
     pub fn cvttsd2si(&mut self, dst: Reg, src: Reg) {
         self.sse(0xF2, true, 0x2C, dst, Rm::R(src));
-    }
-
-    /// `rep movsb`
-    pub fn rep_movsb(&mut self) {
-        self.b(0xF3);
-        self.b(0xA4);
     }
 
     pub fn align_to(&mut self, n: usize, fill: u8) {

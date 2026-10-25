@@ -1,5 +1,7 @@
 //! Static linking: `extern fn` declarations resolved against C, C++ and Rust static libraries.
 
+#![cfg(feature = "legacy-backends")]
+
 mod common;
 use common::*;
 use std::process::Command;

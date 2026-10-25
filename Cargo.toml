@@ -1,6 +1,9 @@
 [workspace]
 resolver = "2"
 members = ["crates/flash", "crates/flash-rt", "crates/flash-plugin-sdk", "plugins/rust/fast_math"]
+# A plain `cargo build` builds only the compiler. The runtime/stub/plugin crates belong to the optional
+# legacy back ends (`cargo build --workspace --features flash/legacy-backends`).
+default-members = ["crates/flash"]
 
 [profile.release]
 opt-level = 3

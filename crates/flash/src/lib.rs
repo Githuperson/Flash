@@ -23,6 +23,7 @@ pub mod fmt;
 pub mod hir;
 pub mod ir;
 pub mod lexer;
+#[cfg(feature = "legacy-backends")]
 pub mod llvm;
 pub mod lower;
 pub mod module;
