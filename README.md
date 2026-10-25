@@ -26,8 +26,8 @@ for i in 0..3:                  # 0, 1, 2   (the upper bound is excluded; use 0.
 ```
 
 > **Status: v0.1, a working prototype.** The compiler, runtime, formatter, test runner, local package manager and the Rust/C++
-> plugin interface all work and are covered by automated tests — on **Linux x86-64**, which is the only platform this was built and run on.
-> Code generation for macOS (including Apple Silicon), Windows and AArch64 Linux is implemented in the compiler but linking and running there is **untested**.
+> plugin interface all work and are covered by automated tests — on **Linux x86-64** and **macOS Apple Silicon** (the full `cargo test --workspace` suite and the benchmark harness pass on arm64 macOS).
+> Windows and AArch64 Linux code generation is implemented in the compiler but linking and running there is **untested**.
 > Performance: measured, not claimed (see [Performance](#performance)). With the default Cranelift backend Flash is 1.0–2.4× slower than Rust on the eight benchmarks; with the optional LLVM backend it is roughly on par with Rust on most of them and still slower than C++ on three.
 
 ## What works
