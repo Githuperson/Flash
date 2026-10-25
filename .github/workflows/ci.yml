@@ -73,6 +73,11 @@ jobs:
           cat io_out.txt
           test "$code" = 3
           cmp io_out.txt tests/native_io/io.expected
+      - name: Package, then test the PowerShell installer
+        shell: powershell
+        run: |
+          bash scripts/package.sh windows-x86_64
+          .\scripts\test_windows_installers.ps1
       - name: Benchmarks give the same answers as on Linux
         shell: bash
         run: |
