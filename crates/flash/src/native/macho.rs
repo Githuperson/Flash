@@ -105,8 +105,9 @@ pub fn write(img: &Image, l: &Layout, arch: Arch, ident: &str) -> Vec<u8> {
     let ro_off = l.rodata - l.base;
     let data_off = l.data - l.base;
     let data_filesz = align(img.data.len() as u64, 16);
-    let data_vmsize = align(data_filesz + img.bss, page);
     let file_data_len = align(img.data.len() as u64, page).max(page);
+    // the segment must cover its file contents even when there is no data and no bss
+    let data_vmsize = align(data_filesz + img.bss, page).max(file_data_len);
     let text_seg_end = align(ro_off + img.rodata.len() as u64, page);
 
     let mut cmds: Vec<u8> = vec![];
