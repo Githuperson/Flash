@@ -101,6 +101,8 @@ pub enum Builtin {
     Unwrap,
     UnwrapOr,
     ErrorMsg,
+    /// Low-level operation of the runtime library, by name (`__peek`, `__syscall`, …).
+    Intrinsic(&'static str),
 }
 
 #[derive(Clone, Debug)]

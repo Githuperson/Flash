@@ -208,7 +208,7 @@ fn run_config(src: &str, args: &[String], release: bool, backend: Option<&str>, 
 fn random_integer_programs_agree_with_the_reference_evaluator_in_every_configuration() {
     let types = [I64, I32, U8, I16, U64];
     let mut configs: Vec<(bool, Option<&str>)> = vec![(false, None), (true, None)];
-    if clang_available() {
+    if cfg!(feature = "legacy-backends") && clang_available() {
         configs.push((true, Some("llvm")));
     }
     let mut total = 0;

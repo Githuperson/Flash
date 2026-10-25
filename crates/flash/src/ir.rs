@@ -38,7 +38,7 @@ pub type DataId = u32;
 pub type MemTag = u16;
 pub const NO_TAG: MemTag = 0;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum BinOp {
     Add,
     Sub,
@@ -59,7 +59,7 @@ pub enum BinOp {
     FDiv,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum CmpOp {
     Eq,
     Ne,
@@ -79,7 +79,7 @@ pub enum CmpOp {
     FGe,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum UnOp {
     Neg,
     Not,
@@ -90,7 +90,7 @@ pub enum UnOp {
     FAbs,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum CastOp {
     /// Zero-extend an integer to a wider type.
     ZExt,
@@ -112,6 +112,9 @@ pub enum Callee {
     Func(FuncRef),
     Extern(ExternRef),
     Indirect(VReg),
+    /// A Linux system call (native back end only); `args[0]` is the call number, followed by up
+    /// to six arguments. Used by the runtime library written in Flash.
+    Syscall,
 }
 
 #[derive(Clone, Debug)]
@@ -166,6 +169,25 @@ pub enum Inst {
         dst: Option<VReg>,
         callee: Callee,
         args: Vec<VReg>,
+    },
+    /// `dst = *(base + (index << scale) + off)`. Produced only by the native back end's last
+    /// pass (address folding); the machine-independent optimiser never sees it.
+    LoadIdx {
+        dst: VReg,
+        base: VReg,
+        index: VReg,
+        scale: u8,
+        off: i32,
+        tag: MemTag,
+    },
+    /// `*(base + (index << scale) + off) = val` (see `LoadIdx`).
+    StoreIdx {
+        base: VReg,
+        index: VReg,
+        scale: u8,
+        off: i32,
+        val: VReg,
+        tag: MemTag,
     },
     /// Address of read-only/static data.
     DataAddr {

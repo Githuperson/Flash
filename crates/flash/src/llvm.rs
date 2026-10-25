@@ -298,6 +298,7 @@ impl<'a> Emitter<'a> {
                         (format!("@{}", e.name), e.params.clone(), e.ret)
                     }
                     Callee::Indirect(_) => unreachable!("indirect calls are not generated"),
+                    Callee::Syscall => unreachable!("system calls exist only in the native back end"),
                 };
                 let mut argv = vec![];
                 for (a, pt) in args.iter().zip(params.iter()) {
@@ -317,6 +318,7 @@ impl<'a> Emitter<'a> {
                     }
                 }
             }
+            Inst::LoadIdx { .. } | Inst::StoreIdx { .. } => unreachable!("indexed memory instructions exist only in the native back end"),
             Inst::DataAddr { dst, data } => {
                 let r = self.t();
                 let _ = writeln!(self.out, "  {} = ptrtoint ptr @data{} to i64", r, data);

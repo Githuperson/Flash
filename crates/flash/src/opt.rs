@@ -9,12 +9,55 @@ use std::collections::HashMap;
 use crate::ir::*;
 
 pub fn optimise(m: &mut Module, release: bool) {
+    let timing = std::env::var_os("FLASH_DEBUG_TIMES").is_some();
+    let t0 = std::time::Instant::now();
+    let lap = |what: &str, t: &mut std::time::Instant| {
+        if timing {
+            eprintln!("  opt: {:<12} {:?}", what, t.elapsed());
+        }
+        *t = std::time::Instant::now();
+    };
+    let mut t = t0;
     for f in &mut m.funcs {
         simplify(f);
     }
+    lap("simplify", &mut t);
     if release {
         inline_small_functions(m);
+        // Functions that were just inlined everywhere are not worth optimising any further.
+        remove_unused_functions(m);
+        lap("inline", &mut t);
         for f in &mut m.funcs {
+            simplify(f);
+        }
+        lap("simplify", &mut t);
+        let ntags = m.tags.len();
+        let (mut tg, mut tl, mut ts) = (std::time::Duration::ZERO, std::time::Duration::ZERO, std::time::Duration::ZERO);
+        for f in &mut m.funcs {
+            let a = std::time::Instant::now();
+            let mut c = crate::gvn::gvn(f, ntags);
+            tg += a.elapsed();
+            let a = std::time::Instant::now();
+            let hoisted = crate::licm::licm(f);
+            tl += a.elapsed();
+            if hoisted {
+                let a = std::time::Instant::now();
+                crate::gvn::gvn(f, ntags);
+                tg += a.elapsed();
+                c = true;
+            }
+            if c {
+                let a = std::time::Instant::now();
+                simplify(f);
+                ts += a.elapsed();
+            }
+        }
+        if timing {
+            eprintln!("  opt: gvn {:?}, licm {:?}, simplify {:?}", tg, tl, ts);
+        }
+    }
+    for f in &mut m.funcs {
+        if rotate_loops(f) {
             simplify(f);
         }
     }
@@ -25,8 +68,12 @@ fn simplify(f: &mut Function) {
     for _ in 0..8 {
         let mut changed = false;
         changed |= fold_constants(f);
+        changed |= local_copy_propagation(f);
+        changed |= fold_copies_into_defs(f);
+        changed |= thread_known_conditions(f);
         changed |= simplify_cfg(f);
         changed |= dead_code(f);
+        changed |= dead_defs(f);
         if !changed {
             break;
         }
@@ -44,11 +91,12 @@ fn def_of(i: &Inst) -> Option<VReg> {
         | Inst::Un { dst, .. }
         | Inst::Cast { dst, .. }
         | Inst::Load { dst, .. }
+        | Inst::LoadIdx { dst, .. }
         | Inst::DataAddr { dst, .. }
         | Inst::StackAddr { dst, .. }
         | Inst::Select { dst, .. } => Some(*dst),
         Inst::Call { dst, .. } => *dst,
-        Inst::Store { .. } => None,
+        Inst::Store { .. } | Inst::StoreIdx { .. } => None,
     }
 }
 
@@ -62,8 +110,17 @@ fn for_uses(i: &mut Inst, mut f: impl FnMut(&mut VReg)) {
             f(b);
         }
         Inst::Load { base, .. } => f(base),
+        Inst::LoadIdx { base, index, .. } => {
+            f(base);
+            f(index);
+        }
         Inst::Store { base, val, .. } => {
             f(base);
+            f(val);
+        }
+        Inst::StoreIdx { base, index, val, .. } => {
+            f(base);
+            f(index);
             f(val);
         }
         Inst::Call { callee, args, .. } => {
@@ -518,11 +575,20 @@ fn inst_count(f: &Function) -> usize {
     f.blocks.iter().map(|b| b.insts.len() + 1).sum()
 }
 
+/// System calls are slow paths; inlining the wrappers around them only bloats the callers.
+fn has_syscall(f: &Function) -> bool {
+    f.blocks.iter().any(|b| b.insts.iter().any(|i| matches!(i, Inst::Call { callee: Callee::Syscall, .. })))
+}
+
 fn calls_func(f: &Function, target: u32) -> bool {
     f.blocks.iter().any(|b| b.insts.iter().any(|i| matches!(i, Inst::Call { callee: Callee::Func(c), .. } if *c == target)))
 }
 
 const INLINE_LIMIT: usize = 60;
+
+fn inline_limit() -> usize {
+    std::env::var("FLASH_DEBUG_INLINE_LIMIT").ok().and_then(|v| v.parse().ok()).unwrap_or(INLINE_LIMIT)
+}
 
 fn inline_small_functions(m: &mut Module) {
     for _round in 0..3 {
@@ -531,7 +597,7 @@ fn inline_small_functions(m: &mut Module) {
             .iter()
             .enumerate()
             .map(|(i, f)| {
-                let ok = !f.exported && !f.no_inline && inst_count(f) <= INLINE_LIMIT && !calls_func(f, i as u32);
+                let ok = !f.exported && !f.no_inline && inst_count(f) <= inline_limit() && !calls_func(f, i as u32) && !has_syscall(f);
                 ok.then(|| f.clone())
             })
             .collect();
@@ -565,6 +631,11 @@ fn inline_into(f: &mut Function, self_idx: u32, cands: &[Option<Function>]) -> b
     let mut budget = 200; // bound total growth
     'outer: loop {
         for bi in 0..f.blocks.len() {
+            // Never inline on a path that ends the program (panics, error reports): it only bloats
+            // the function and keeps registers busy on the cold path.
+            if matches!(f.blocks[bi].term, Term::Unreachable) {
+                continue;
+            }
             for ii in 0..f.blocks[bi].insts.len() {
                 let Inst::Call { dst, callee: Callee::Func(c), args } = f.blocks[bi].insts[ii].clone() else { continue };
                 if c == self_idx {
@@ -626,6 +697,7 @@ fn splice(f: &mut Function, bi: usize, ii: usize, dst: Option<VReg>, args: &[VRe
 
 fn remap_inst(i: &mut Inst, vbase: u32, sbase: u32) {
     match i {
+        Inst::LoadIdx { .. } | Inst::StoreIdx { .. } => unreachable!("indexed memory instructions are created after inlining"),
         Inst::IConst { dst, .. } | Inst::FConst { dst, .. } | Inst::DataAddr { dst, .. } => *dst += vbase,
         Inst::StackAddr { dst, slot } => {
             *dst += vbase;
@@ -676,7 +748,7 @@ fn remap_inst(i: &mut Inst, vbase: u32, sbase: u32) {
 /// Drop functions that are never called (glue that got fully inlined, unused user functions).
 /// Function indices are call targets, so unused functions are replaced by empty stubs would
 /// break numbering; instead we renumber.
-fn remove_unused_functions(m: &mut Module) {
+pub fn remove_unused_functions(m: &mut Module) {
     let n = m.funcs.len();
     let mut live = vec![false; n];
     let mut stack = vec![];
@@ -723,4 +795,270 @@ fn remove_unused_functions(m: &mut Module) {
         }
         m.funcs.push(f);
     }
+}
+
+// ------------------------------------------------------ copies and loops
+fn uses_vreg(i: &Inst, v: VReg) -> bool {
+    let mut found = false;
+    let mut c = i.clone();
+    for_uses(&mut c, |u| found |= *u == v);
+    found
+}
+
+fn set_def(i: &mut Inst, nd: VReg) {
+    match i {
+        Inst::IConst { dst, .. }
+        | Inst::FConst { dst, .. }
+        | Inst::Copy { dst, .. }
+        | Inst::Bin { dst, .. }
+        | Inst::Cmp { dst, .. }
+        | Inst::Un { dst, .. }
+        | Inst::Cast { dst, .. }
+        | Inst::Load { dst, .. }
+        | Inst::LoadIdx { dst, .. }
+        | Inst::DataAddr { dst, .. }
+        | Inst::StackAddr { dst, .. }
+        | Inst::Select { dst, .. } => *dst = nd,
+        Inst::Call { dst, .. } => *dst = Some(nd),
+        Inst::Store { .. } | Inst::StoreIdx { .. } => {}
+    }
+}
+
+/// Within a basic block, replace uses of `d` by `s` after `d = s` while neither is reassigned.
+fn local_copy_propagation(f: &mut Function) -> bool {
+    let mut changed = false;
+    let vregs = &f.vregs;
+    for b in &mut f.blocks {
+        let mut map: HashMap<VReg, VReg> = HashMap::new();
+        for inst in &mut b.insts {
+            for_uses(inst, |u| {
+                if let Some(s) = map.get(u) {
+                    *u = *s;
+                    changed = true;
+                }
+            });
+            if let Some(d) = def_of(inst) {
+                map.retain(|k, v| *k != d && *v != d);
+            }
+            if let Inst::Copy { dst, src } = inst {
+                if dst != src && vregs[*dst as usize] == vregs[*src as usize] {
+                    map.insert(*dst, *src);
+                }
+            }
+        }
+        term_uses(&mut b.term, |u| {
+            if let Some(s) = map.get(u) {
+                *u = *s;
+                changed = true;
+            }
+        });
+    }
+    changed
+}
+
+/// `t = a op b; ...; d = t` with `t` used only by the copy: compute straight into `d`.
+fn fold_copies_into_defs(f: &mut Function) -> bool {
+    let nparams = f.params.len();
+    let mut defs = vec![0u32; f.vregs.len()];
+    let mut uses = vec![0u32; f.vregs.len()];
+    for b in &mut f.blocks {
+        for i in &mut b.insts {
+            if let Some(d) = def_of(i) {
+                defs[d as usize] += 1;
+            }
+            for_uses(i, |u| uses[*u as usize] += 1);
+        }
+        term_uses(&mut b.term, |u| uses[*u as usize] += 1);
+    }
+    let mut changed = false;
+    for bi in 0..f.blocks.len() {
+        let mut k = 0;
+        while k < f.blocks[bi].insts.len() {
+            let Inst::Copy { dst: d, src: s } = f.blocks[bi].insts[k] else {
+                k += 1;
+                continue;
+            };
+            if d != s && (s as usize) >= nparams && defs[s as usize] == 1 && uses[s as usize] == 1 && f.vregs[d as usize] == f.vregs[s as usize] {
+                let insts = &f.blocks[bi].insts;
+                if let Some(j) = (0..k).rev().find(|j| def_of(&insts[*j]) == Some(s)) {
+                    let clear = (j + 1..k).all(|m| !uses_vreg(&insts[m], d) && def_of(&insts[m]) != Some(d));
+                    if clear {
+                        set_def(&mut f.blocks[bi].insts[j], d);
+                        f.blocks[bi].insts.remove(k);
+                        defs[d as usize] = defs[d as usize].max(1);
+                        changed = true;
+                        continue;
+                    }
+                }
+            }
+            k += 1;
+        }
+    }
+    changed
+}
+
+/// Loop rotation by tail duplication: a jump to a small block that only tests a condition and
+/// branches is replaced by a copy of that test, so a loop runs with one conditional branch per
+/// iteration instead of a test at the top and an unconditional jump at the bottom.
+fn rotate_loops(f: &mut Function) -> bool {
+    let n = f.blocks.len();
+    let mut preds = vec![0u32; n];
+    for b in &f.blocks {
+        match &b.term {
+            Term::Jump(t) => preds[*t as usize] += 1,
+            Term::Br { then_, else_, .. } => {
+                preds[*then_ as usize] += 1;
+                preds[*else_ as usize] += 1;
+            }
+            _ => {}
+        }
+    }
+    let mut changed = false;
+    for bi in 0..n {
+        let Term::Jump(h) = f.blocks[bi].term else { continue };
+        let h = h as usize;
+        if h == bi || preds[h] < 2 {
+            continue;
+        }
+        let hb = &f.blocks[h];
+        if matches!(hb.term, Term::Br { .. }) && hb.insts.len() <= 3 && !hb.insts.iter().any(|i| matches!(i, Inst::Call { .. })) {
+            let (insts, term) = (hb.insts.clone(), hb.term.clone());
+            f.blocks[bi].insts.extend(insts);
+            f.blocks[bi].term = term;
+            changed = true;
+        }
+    }
+    changed
+}
+
+/// Jump threading for boolean conditions copied into other registers: if block B branches on `c`
+/// and an edge leads to an empty block that branches on a copy of `c`, the outcome of that second
+/// branch is known on that edge, so the edge goes straight to the right successor. This turns the
+/// materialised Bool of a short-circuit `a and b` back into plain control flow.
+fn thread_known_conditions(f: &mut Function) -> bool {
+    let mut changed = false;
+    for bi in 0..f.blocks.len() {
+        let Term::Br { cond: c, then_, else_ } = f.blocks[bi].term else { continue };
+        // Registers that hold the same value as `c` at the end of the block.
+        let mut equal: Vec<VReg> = vec![c];
+        let insts = &f.blocks[bi].insts;
+        for (j, i) in insts.iter().enumerate() {
+            if let Inst::Copy { dst, src } = i {
+                if *src == c && *dst != c {
+                    let later_redefined = insts[j + 1..].iter().any(|m| matches!(def_of(m), Some(d) if d == *dst || d == c));
+                    if !later_redefined {
+                        equal.push(*dst);
+                    }
+                }
+            }
+        }
+        let mut new_then = then_;
+        let mut new_else = else_;
+        let target_of = |blocks: &[Block], t: u32, taken: bool| -> Option<u32> {
+            let tb = &blocks[t as usize];
+            if !tb.insts.is_empty() {
+                return None;
+            }
+            match tb.term {
+                Term::Br { cond, then_: x, else_: y } if equal.contains(&cond) => Some(if taken { x } else { y }),
+                _ => None,
+            }
+        };
+        if let Some(x) = target_of(&f.blocks, then_, true) {
+            new_then = x;
+        }
+        if let Some(y) = target_of(&f.blocks, else_, false) {
+            new_else = y;
+        }
+        if (new_then, new_else) != (then_, else_) {
+            f.blocks[bi].term = Term::Br { cond: c, then_: new_then, else_: new_else };
+            changed = true;
+        }
+    }
+    changed
+}
+
+/// Remove pure definitions whose value is never read before being overwritten (liveness-based,
+/// so it also removes dead assignments to registers that are used elsewhere).
+fn dead_defs(f: &mut Function) -> bool {
+    let nv = f.vregs.len();
+    let nb = f.blocks.len();
+    let words = nv.div_ceil(64);
+    let succs = |t: &Term| -> Vec<usize> {
+        match t {
+            Term::Jump(b) => vec![*b as usize],
+            Term::Br { then_, else_, .. } => vec![*then_ as usize, *else_ as usize],
+            _ => vec![],
+        }
+    };
+    // use/def sets per block
+    let mut use_b = vec![vec![0u64; words]; nb];
+    let mut def_b = vec![vec![0u64; words]; nb];
+    let set = |v: &mut Vec<u64>, i: usize| v[i / 64] |= 1 << (i % 64);
+    let get = |v: &Vec<u64>, i: usize| v[i / 64] >> (i % 64) & 1 != 0;
+    for (bi, b) in f.blocks.iter_mut().enumerate() {
+        for i in &mut b.insts {
+            for_uses(i, |u| {
+                if !get(&def_b[bi], *u as usize) {
+                    set(&mut use_b[bi], *u as usize);
+                }
+            });
+            if let Some(d) = def_of(i) {
+                set(&mut def_b[bi], d as usize);
+            }
+        }
+        term_uses(&mut b.term, |u| {
+            if !get(&def_b[bi], *u as usize) {
+                set(&mut use_b[bi], *u as usize);
+            }
+        });
+    }
+    let mut live_in = use_b.clone();
+    let mut live_out = vec![vec![0u64; words]; nb];
+    loop {
+        let mut changed = false;
+        for bi in (0..nb).rev() {
+            let mut out = vec![0u64; words];
+            for s in succs(&f.blocks[bi].term) {
+                for (o, l) in out.iter_mut().zip(&live_in[s]) {
+                    *o |= *l;
+                }
+            }
+            for w in 0..words {
+                let inn = use_b[bi][w] | (out[w] & !def_b[bi][w]);
+                if inn != live_in[bi][w] {
+                    live_in[bi][w] = inn;
+                    changed = true;
+                }
+            }
+            live_out[bi] = out;
+        }
+        if !changed {
+            break;
+        }
+    }
+    let mut changed = false;
+    for bi in 0..nb {
+        let mut live = live_out[bi].clone();
+        let blk = &mut f.blocks[bi];
+        term_uses(&mut blk.term, |u| set(&mut live, *u as usize));
+        let mut keep = vec![true; blk.insts.len()];
+        for k in (0..blk.insts.len()).rev() {
+            let inst = &mut blk.insts[k];
+            if let Some(d) = def_of(inst) {
+                if !get(&live, d as usize) && is_pure(inst) {
+                    keep[k] = false;
+                    changed = true;
+                    continue;
+                }
+                live[d as usize / 64] &= !(1 << (d as usize % 64));
+            }
+            for_uses(inst, |u| set(&mut live, *u as usize));
+        }
+        if keep.iter().any(|k| !*k) {
+            let mut it = keep.iter();
+            blk.insts.retain(|_| *it.next().unwrap());
+        }
+    }
+    changed
 }

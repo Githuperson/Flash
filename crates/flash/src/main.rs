@@ -20,8 +20,11 @@ OPTIONS:
     --target <triple>  Cross-compile (object file only, e.g. aarch64-apple-darwin)
     --emit-ir        Print the intermediate representation
     --link <lib>     Link a native library (.a/.o/.so) for `extern fn` declarations; also -l<name> -L<dir>
+    --linker <l>     `builtin` (no C compiler needed; Linux x86-64), `system` (cc), or `auto` (default: builtin when possible)
     --no-cache       Do not reuse or store executables in the build cache (~/.cache/flash, or $FLASH_CACHE_DIR)
-    --backend <b>    Code generator: `cranelift` (default) or `llvm` (needs clang)
+    --backend <b>    Code generator: `auto` (default: Flash's own native back end; the optional
+                     legacy back ends are used only for `extern fn`, plugins and other targets),
+                     `native`, `cranelift` or `llvm` (needs clang)
     --emit-llvm      Print the LLVM IR instead of building
 ";
 
@@ -70,16 +73,30 @@ fn main() -> ExitCode {
                     }
                 }
             }
+            "--linker" => {
+                i += 1;
+                opts.linker = match rest.get(i).map(|s| s.as_str()) {
+                    Some("auto") => driver::Linker::Auto,
+                    Some("system") => driver::Linker::System,
+                    Some("builtin") => driver::Linker::Builtin,
+                    other => {
+                        eprintln!("--linker must be `auto`, `system` or `builtin` (got {:?})", other);
+                        return ExitCode::from(2);
+                    }
+                };
+            }
             "--emit-llvm" => {
                 opts_emit_llvm = true;
             }
             "--backend" => {
                 i += 1;
                 opts.backend = match rest.get(i).map(|s| s.as_str()) {
+                    Some("auto") => flashc::codegen::Backend::Auto,
+                    Some("native") => flashc::codegen::Backend::Native,
                     Some("cranelift") => flashc::codegen::Backend::Cranelift,
                     Some("llvm") => flashc::codegen::Backend::Llvm,
                     other => {
-                        eprintln!("--backend must be `cranelift` or `llvm` (got {:?})", other);
+                        eprintln!("--backend must be `auto`, `native`, `cranelift` or `llvm` (got {:?})", other);
                         return ExitCode::from(2);
                     }
                 };
@@ -133,8 +150,17 @@ fn main() -> ExitCode {
             match driver::frontend(&f, None) {
                 Ok(fe) => {
                     let m = driver::lower_and_optimise(&fe.program, opts.release);
-                    print!("{}", flashc::llvm::emit_ir(&m));
-                    ExitCode::SUCCESS
+                    #[cfg(feature = "legacy-backends")]
+                    {
+                        print!("{}", flashc::llvm::emit_ir(&m));
+                        ExitCode::SUCCESS
+                    }
+                    #[cfg(not(feature = "legacy-backends"))]
+                    {
+                        let _ = m;
+                        eprintln!("--emit-llvm needs a build with --features legacy-backends");
+                        ExitCode::from(2)
+                    }
                 }
                 Err(e) => {
                     eprint!("{}", e);

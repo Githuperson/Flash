@@ -20,18 +20,23 @@ pub mod codegen;
 pub mod diag;
 pub mod driver;
 pub mod fmt;
+pub mod gvn;
 pub mod hir;
 pub mod ir;
+pub mod cfg;
 pub mod lexer;
+pub mod licm;
+#[cfg(feature = "legacy-backends")]
 pub mod llvm;
 pub mod lower;
 pub mod module;
+pub mod native;
 pub mod opt;
 pub mod parser;
 pub mod pkg;
 pub mod plugins;
 pub mod resolve;
-mod rtsigs;
+pub mod rtsigs;
 pub mod source;
 pub mod types;
 

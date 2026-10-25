@@ -19,7 +19,7 @@ fn ownership_programs_are_clean_under_valgrind() {
     let root = repo_root();
     let dir = scratch_dir("memcheck");
     let mut configs: Vec<Vec<&str>> = vec![vec![], vec!["--release"]];
-    if clang_available() {
+    if cfg!(feature = "legacy-backends") && clang_available() {
         configs.push(vec!["--release", "--backend", "llvm"]);
     }
     for prog in [

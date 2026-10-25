@@ -13,3 +13,10 @@ crate-type = ["staticlib", "rlib"]
 libloading = "0.9"
 flash-plugin-sdk = { path = "../flash-plugin-sdk" }
 sha2 = "0.10"
+object = { version = "0.40", default-features = false, features = ["read", "elf", "std"] }
+libc = "0.2"
+
+[[bin]]
+name = "flash-stub"
+path = "src/bin/flash-stub.rs"
+test = false

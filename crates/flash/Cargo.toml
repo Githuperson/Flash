@@ -17,13 +17,19 @@ path = "src/main.rs"
 name = "flashpkg"
 path = "src/bin/flashpkg.rs"
 
+[features]
+default = []
+# The optional Cranelift and LLVM(clang) back ends, `extern fn`/--link support and native plugins.
+# The default build contains only Flash's own native back end.
+legacy-backends = ["dep:cranelift-codegen", "dep:cranelift-frontend", "dep:cranelift-module", "dep:cranelift-object", "dep:cranelift-native", "dep:target-lexicon"]
+
 [dependencies]
-cranelift-codegen = { version = "0.137", features = ["all-arch"] }
-cranelift-frontend = "0.137"
-cranelift-module = "0.137"
-cranelift-object = "0.137"
-cranelift-native = "0.137"
-target-lexicon = "*"
+cranelift-codegen = { version = "0.137", features = ["all-arch"], optional = true }
+cranelift-frontend = { version = "0.137", optional = true }
+cranelift-module = { version = "0.137", optional = true }
+cranelift-object = { version = "0.137", optional = true }
+cranelift-native = { version = "0.137", optional = true }
+target-lexicon = { version = "*", optional = true }
 sha2 = "0.10"
 toml = "0.8"
 serde = { version = "1", features = ["derive"] }

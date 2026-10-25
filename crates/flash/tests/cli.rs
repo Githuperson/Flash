@@ -148,6 +148,7 @@ fn flash_test_runs_test_functions_and_reports_failures() {
     assert!(out.contains("1 passed; 1 failed"));
 }
 
+#[cfg(feature = "legacy-backends")]
 #[test]
 fn cross_compilation_emits_objects_for_other_platforms() {
     // Linking needs a target toolchain, but the code generator can produce objects for each target.
@@ -216,4 +217,56 @@ fn build_cache_reuses_executables_and_invalidates_on_change() {
     std::fs::write(&helper, "fn f():\n    return 2\n").unwrap();
     assert!(text(&build(&[]).stdout).contains("front end"));
     assert_eq!(text(&Command::new(&exe).output().unwrap().stdout), "2\n");
+}
+
+#[test]
+fn programs_build_and_run_without_any_c_compiler_or_linker() {
+    if !cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+        eprintln!("note: the native back end is Linux x86-64 only; skipping");
+        return;
+    }
+    let dir = scratch_dir("cli-nocc");
+    let exe = dir.join("hello");
+    // An empty PATH and a bogus FLASH_CC: nothing that looks like cc/ld can be found.
+    let src = repo_root().join("tests/programs/ownership_flow.flash");
+    let out = Command::new(flash_bin())
+        .args(["build", src.to_str().unwrap(), "-o", exe.to_str().unwrap(), "--no-cache"])
+        .env("PATH", dir.join("empty"))
+        .env("FLASH_CC", "/nonexistent/cc")
+        .env("FLASH_CACHE_DIR", test_cache_dir())
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    let run = Command::new(&exe).env("PATH", dir.join("empty")).env("FLASH_RT_LEAKCHECK", "1").output().unwrap();
+    let expected = std::fs::read_to_string(repo_root().join("tests/programs/ownership_flow.expected")).unwrap();
+    assert_eq!(text(&run.stdout), expected);
+    assert!(text(&run.stderr).contains("live allocations at exit: 0"));
+    #[cfg(feature = "legacy-backends")]
+    {
+    // forcing the system linker with a missing compiler fails clearly; forcing builtin with --link is refused
+        let sys = Command::new(flash_bin())
+            .args(["build", src.to_str().unwrap(), "-o", exe.to_str().unwrap(), "--no-cache", "--linker", "system"])
+            .env("FLASH_CC", "/nonexistent/cc")
+            .env("FLASH_CACHE_DIR", test_cache_dir())
+            .output()
+            .unwrap();
+        assert_eq!(sys.status.code(), Some(1));
+        assert!(text(&sys.stderr).contains("cannot run the linker"), "{}", text(&sys.stderr));
+        let bad = flash(&["build", src.to_str().unwrap(), "-o", exe.to_str().unwrap(), "--no-cache", "--linker", "builtin", "--link", "x.a"]);
+        assert_eq!(bad.status.code(), Some(1));
+        assert!(text(&bad.stderr).contains("need the system linker"), "{}", text(&bad.stderr));
+    }
+}
+
+#[test]
+fn the_stub_resolves_every_runtime_function_the_compiler_can_emit() {
+    let stub = flash_bin().with_file_name("flash-stub");
+    if !stub.is_file() {
+        eprintln!("note: flash-stub not built; skipping");
+        return;
+    }
+    let names: Vec<&str> = flashc::rtsigs::RT_FUNCS.iter().map(|(n, _, _)| *n).collect();
+    let out = Command::new(&stub).arg("--check-symbols").args(&names).output().unwrap();
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    assert!(text(&out.stdout).contains(&format!("all {} symbols resolve", names.len())));
 }
