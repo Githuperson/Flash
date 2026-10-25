@@ -1,0 +1,55 @@
+# Diagnostic: why does macOS arm64 reject Flash's static Mach-O? Prints facts, never fails.
+name: macho-probe
+on:
+  workflow_dispatch:
+  push:
+    paths: [".github/workflows/macho-probe.yml"]
+jobs:
+  probe:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --release -p flash
+      - name: Probe
+        continue-on-error: true
+        run: |
+          set +e
+          uname -a; sw_vers
+          mkdir -p /tmp/p && cd /tmp/p
+          F=$GITHUB_WORKSPACE/target/release/flash
+          $F build $GITHUB_WORKSPACE/examples/hello.flash --target aarch64-apple-darwin -o flash_hello
+          echo "== run flash_hello"; ./flash_hello; echo "rc=$?"
+          echo "== codesign verify"; codesign -dvvv flash_hello 2>&1; codesign --verify --verbose=4 flash_hello 2>&1
+          echo "== otool -l (flash)"; otool -l flash_hello | head -120
+          echo "== kernel log"; sudo log show --last 2m --info --debug --predicate 'eventMessage CONTAINS[c] "flash_hello" OR process == "kernel" AND eventMessage CONTAINS[c] "AMFI"' 2>&1 | tail -40
+          cat > ref.s <<'ASM'
+          .globl _main
+          .p2align 2
+          _main:
+            mov x0, #0
+            mov x16, #1
+            svc #0x80
+          ASM
+          sed -i 's/^          //' ref.s
+          echo "== reference dynamic (libSystem), raw svc exit"
+          clang -o ref_dyn ref.s && ./ref_dyn; echo "rc=$?"
+          otool -l ref_dyn | grep -E "cmd |flags|magic" | head -40
+          echo "== reference static, no libSystem"
+          cat > st.s <<'ASM'
+          .globl _start
+          .p2align 2
+          _start:
+            mov x0, #5
+            mov x16, #1
+            svc #0x80
+          ASM
+          sed -i 's/^          //' st.s
+          clang -c st.s -o st.o && ld -static -arch arm64 -e _start -o ref_static st.o 2>&1 | head -5
+          ./ref_static; echo "static rc=$?"
+          codesign -dvvv ref_static 2>&1 | head -12
+          otool -l ref_static | head -80
+          echo "== no libSystem dynamic-less with LC_MAIN"
+          ld -arch arm64 -e _start -o ref_nolib st.o -platform_version macos 11.0 11.0 2>&1 | head -5
+          ./ref_nolib; echo "nolib rc=$?"
+          otool -hv ref_nolib; otool -l ref_nolib | grep -E "cmd |dylinker|name" | head -30
