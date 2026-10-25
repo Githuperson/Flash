@@ -66,7 +66,8 @@ The script downloads the prebuilt archive for your platform (Linux x86-64, macOS
 `flash` finds its standard library relative to its own location, so no environment variables are needed. `./uninstall.sh` removes everything.
 
 * **From a checkout:** `./install.sh` builds from source (`FLASH_FROM_SOURCE=1` forces that for the curl form too).
-* **Publishing a release (maintainers):** `git tag v0.1.0 && git push origin v0.1.0` runs `.github/workflows/release.yml`, which builds the three archives with `scripts/package.sh` and attaches them to a GitHub release.
+* **Publishing a release (maintainers):** `git tag v0.2.0 && git push origin v0.2.0` runs `.github/workflows/release.yml`, which builds archives for Linux x86-64, Linux arm64, macOS Apple Silicon and Windows x86-64 with `scripts/package.sh`, smoke-tests each one (the packaged compiler must build and run a program) and attaches them to a GitHub release. A tag with a hyphen (`v0.2.0-rc1`) is published as a pre-release.
+* **Windows:** download `flash-windows-x86_64.zip` from the releases page, unzip it, and add its `bin` folder to `PATH` (`install.sh` is for Linux and macOS). The compiler needs no other tools. Any release archive can also cross-compile: `flash build prog.flash --target x86_64-pc-windows-msvc`.
   **That workflow has never run**, and the one-line installer only works once this code is on `main` and a release exists; the Linux archive and the download/checksum/unpack path were tested locally against a local web server, macOS archives were not.
 * The plugin examples are not part of the archive; build them from a checkout (below).
 

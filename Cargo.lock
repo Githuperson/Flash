@@ -265,7 +265,7 @@ dependencies = [
 
 [[package]]
 name = "flash"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "cranelift-codegen",
  "cranelift-frontend",
@@ -280,11 +280,11 @@ dependencies = [
 
 [[package]]
 name = "flash-plugin-sdk"
-version = "0.1.0"
+version = "0.2.0"
 
 [[package]]
 name = "flash-rt"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "flash-plugin-sdk",
  "libc",

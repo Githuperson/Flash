@@ -45,6 +45,7 @@ finish() {
 if [ "$in_checkout" = 0 ] && [ -z "${FLASH_FROM_SOURCE:-}" ]; then
   case "$(uname -s)-$(uname -m)" in
     Linux-x86_64) PLAT=linux-x86_64 ;;
+    Linux-aarch64|Linux-arm64) PLAT=linux-aarch64 ;;
     Darwin-arm64) PLAT=macos-aarch64 ;;
     Darwin-x86_64) PLAT=macos-x86_64 ;;
     *) PLAT="" ;;
