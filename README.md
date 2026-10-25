@@ -226,17 +226,17 @@ Flash (native) run time divided by Rust / C++ run time (above 1.00 means Flash i
 
 | benchmark | native / rust | native / c++ -O3 | llvm\* / rust |
 |---|---|---|---|
-| int_loop | 1.22x | 1.06x | 1.07x |
-| fib | 1.76x | 3.20x | 0.91x |
-| mandelbrot | 1.11x | 1.08x | 1.05x |
-| sieve | 1.20x | 1.26x | 0.97x |
-| strings | 0.74x | 0.94x | 0.97x |
-| alloc | 0.31x | 0.63x | 0.91x |
-| nbody | 1.59x | 1.02x | 1.57x |
-| matmul | 2.24x | 3.39x | 1.08x |
+| int_loop | 1.23x | 1.07x | 1.07x |
+| fib | 0.93x | 1.45x | 0.91x |
+| mandelbrot | 1.15x | 1.15x | 1.05x |
+| sieve | 1.11x | 1.24x | 0.97x |
+| strings | 0.59x | 0.61x | 0.97x |
+| alloc | 0.34x | 0.93x | 0.91x |
+| nbody | 1.95x | 1.58x | 1.57x |
+| matmul | 2.39x | 3.58x | 1.08x |
 
-**What this does and does not show.** Flash's own code generator is within roughly 10–25% of Rust on three programs, 1.6–1.8× on `nbody` and `fib`, and 2.2× on `matmul`; it is faster than Rust on `strings` and `alloc`, which are dominated by
-allocation (Flash's allocator is a few inlined instructions; the Rust/C++ programs use glibc `malloc`, so this compares allocators as much as compilers). LLVM still generates better code for `fib` and `matmul`.
+**What this does and does not show.** Flash's own code generator is within roughly 10–25% of Rust on four programs, on par with Rust on `fib` (the optimiser expands a small self-recursive function once, halving the calls), about 1.6–2× on `nbody` and 2.4× on `matmul`; (the native columns were re-measured after that change, the LLVM column is from the earlier run; timings on this shared machine vary by 10–30% between runs); it is faster than Rust on `strings` and `alloc`, which are dominated by
+allocation (Flash's allocator is a few inlined instructions; the Rust/C++ programs use glibc `malloc`, so this compares allocators as much as compilers). LLVM still generates better code for `matmul`, and C++ -O3 unrolls `fib` further.
 Flash is **not** shown to be faster than Rust or C++ on compute workloads: Flash checks list indexes, structs are heap blocks, there is no vectorisation, and the benchmarks are small single-machine measurements.
 A native-only Flash executable needs 0.3 MiB of memory for a trivial program (Rust: 2.2 MiB) and is tens of KiB in size.
 

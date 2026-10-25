@@ -23,7 +23,7 @@ Compiled programs need no Flash runtime, interpreter, clang or C library at run 
 
 ## Honest summary
 
-* The native back end is within ~10–25% of Rust on `int_loop`, `mandelbrot`, `sieve`; 1.6–1.8× on `nbody`, `fib`; 2.2× on `matmul`; faster on `strings` and `alloc` (allocator differences, see RESULTS.md).
+* The native back end is within ~10–25% of Rust on `int_loop`, `mandelbrot`, `sieve`; on par with Rust on `fib` (0.93×, after self-recursion expansion), about 1.6–2× on `nbody`; 2.4× on `matmul`; faster on `strings` and `alloc` (allocator differences, see RESULTS.md).
 * There is **no** compute workload here where Flash is demonstrably faster than Rust; sub-1.0 ratios on `strings`/`alloc` compare Flash's allocator with glibc `malloc`.
 * Not yet benchmarked: sorting, JSON, hash maps, file I/O, multithreading (these features do not exist yet; see ROADMAP.md).
 * Flash checks list bounds and wraps on integer overflow; the C++ versions use unchecked access, so the comparison is not like-for-like.
