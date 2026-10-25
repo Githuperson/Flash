@@ -38,7 +38,7 @@ pub type DataId = u32;
 pub type MemTag = u16;
 pub const NO_TAG: MemTag = 0;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum BinOp {
     Add,
     Sub,
@@ -59,7 +59,7 @@ pub enum BinOp {
     FDiv,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum CmpOp {
     Eq,
     Ne,
@@ -79,7 +79,7 @@ pub enum CmpOp {
     FGe,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum UnOp {
     Neg,
     Not,
@@ -90,7 +90,7 @@ pub enum UnOp {
     FAbs,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum CastOp {
     /// Zero-extend an integer to a wider type.
     ZExt,

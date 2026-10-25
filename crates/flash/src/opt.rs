@@ -17,6 +17,17 @@ pub fn optimise(m: &mut Module, release: bool) {
         for f in &mut m.funcs {
             simplify(f);
         }
+        let ntags = m.tags.len();
+        for f in &mut m.funcs {
+            let mut c = crate::gvn::gvn(f, ntags);
+            if crate::licm::licm(f) {
+                crate::gvn::gvn(f, ntags);
+                c = true;
+            }
+            if c {
+                simplify(f);
+            }
+        }
     }
     for f in &mut m.funcs {
         if rotate_loops(f) {
@@ -32,8 +43,10 @@ fn simplify(f: &mut Function) {
         changed |= fold_constants(f);
         changed |= local_copy_propagation(f);
         changed |= fold_copies_into_defs(f);
+        changed |= thread_known_conditions(f);
         changed |= simplify_cfg(f);
         changed |= dead_code(f);
+        changed |= dead_defs(f);
         if !changed {
             break;
         }
@@ -864,6 +877,138 @@ fn rotate_loops(f: &mut Function) -> bool {
             f.blocks[bi].insts.extend(insts);
             f.blocks[bi].term = term;
             changed = true;
+        }
+    }
+    changed
+}
+
+/// Jump threading for boolean conditions copied into other registers: if block B branches on `c`
+/// and an edge leads to an empty block that branches on a copy of `c`, the outcome of that second
+/// branch is known on that edge, so the edge goes straight to the right successor. This turns the
+/// materialised Bool of a short-circuit `a and b` back into plain control flow.
+fn thread_known_conditions(f: &mut Function) -> bool {
+    let mut changed = false;
+    for bi in 0..f.blocks.len() {
+        let Term::Br { cond: c, then_, else_ } = f.blocks[bi].term else { continue };
+        // Registers that hold the same value as `c` at the end of the block.
+        let mut equal: Vec<VReg> = vec![c];
+        let insts = &f.blocks[bi].insts;
+        for (j, i) in insts.iter().enumerate() {
+            if let Inst::Copy { dst, src } = i {
+                if *src == c && *dst != c {
+                    let later_redefined = insts[j + 1..].iter().any(|m| matches!(def_of(m), Some(d) if d == *dst || d == c));
+                    if !later_redefined {
+                        equal.push(*dst);
+                    }
+                }
+            }
+        }
+        let mut new_then = then_;
+        let mut new_else = else_;
+        let target_of = |blocks: &[Block], t: u32, taken: bool| -> Option<u32> {
+            let tb = &blocks[t as usize];
+            if !tb.insts.is_empty() {
+                return None;
+            }
+            match tb.term {
+                Term::Br { cond, then_: x, else_: y } if equal.contains(&cond) => Some(if taken { x } else { y }),
+                _ => None,
+            }
+        };
+        if let Some(x) = target_of(&f.blocks, then_, true) {
+            new_then = x;
+        }
+        if let Some(y) = target_of(&f.blocks, else_, false) {
+            new_else = y;
+        }
+        if (new_then, new_else) != (then_, else_) {
+            f.blocks[bi].term = Term::Br { cond: c, then_: new_then, else_: new_else };
+            changed = true;
+        }
+    }
+    changed
+}
+
+/// Remove pure definitions whose value is never read before being overwritten (liveness-based,
+/// so it also removes dead assignments to registers that are used elsewhere).
+fn dead_defs(f: &mut Function) -> bool {
+    let nv = f.vregs.len();
+    let nb = f.blocks.len();
+    let words = nv.div_ceil(64);
+    let succs = |t: &Term| -> Vec<usize> {
+        match t {
+            Term::Jump(b) => vec![*b as usize],
+            Term::Br { then_, else_, .. } => vec![*then_ as usize, *else_ as usize],
+            _ => vec![],
+        }
+    };
+    // use/def sets per block
+    let mut use_b = vec![vec![0u64; words]; nb];
+    let mut def_b = vec![vec![0u64; words]; nb];
+    let set = |v: &mut Vec<u64>, i: usize| v[i / 64] |= 1 << (i % 64);
+    let get = |v: &Vec<u64>, i: usize| v[i / 64] >> (i % 64) & 1 != 0;
+    for (bi, b) in f.blocks.iter_mut().enumerate() {
+        for i in &mut b.insts {
+            for_uses(i, |u| {
+                if !get(&def_b[bi], *u as usize) {
+                    set(&mut use_b[bi], *u as usize);
+                }
+            });
+            if let Some(d) = def_of(i) {
+                set(&mut def_b[bi], d as usize);
+            }
+        }
+        term_uses(&mut b.term, |u| {
+            if !get(&def_b[bi], *u as usize) {
+                set(&mut use_b[bi], *u as usize);
+            }
+        });
+    }
+    let mut live_in = use_b.clone();
+    let mut live_out = vec![vec![0u64; words]; nb];
+    loop {
+        let mut changed = false;
+        for bi in (0..nb).rev() {
+            let mut out = vec![0u64; words];
+            for s in succs(&f.blocks[bi].term) {
+                for (o, l) in out.iter_mut().zip(&live_in[s]) {
+                    *o |= *l;
+                }
+            }
+            for w in 0..words {
+                let inn = use_b[bi][w] | (out[w] & !def_b[bi][w]);
+                if inn != live_in[bi][w] {
+                    live_in[bi][w] = inn;
+                    changed = true;
+                }
+            }
+            live_out[bi] = out;
+        }
+        if !changed {
+            break;
+        }
+    }
+    let mut changed = false;
+    for bi in 0..nb {
+        let mut live = live_out[bi].clone();
+        let blk = &mut f.blocks[bi];
+        term_uses(&mut blk.term, |u| set(&mut live, *u as usize));
+        let mut keep = vec![true; blk.insts.len()];
+        for k in (0..blk.insts.len()).rev() {
+            let inst = &mut blk.insts[k];
+            if let Some(d) = def_of(inst) {
+                if !get(&live, d as usize) && is_pure(inst) {
+                    keep[k] = false;
+                    changed = true;
+                    continue;
+                }
+                live[d as usize / 64] &= !(1 << (d as usize % 64));
+            }
+            for_uses(inst, |u| set(&mut live, *u as usize));
+        }
+        if keep.iter().any(|k| !*k) {
+            let mut it = keep.iter();
+            blk.insts.retain(|_| *it.next().unwrap());
         }
     }
     changed

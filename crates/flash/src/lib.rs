@@ -20,9 +20,12 @@ pub mod codegen;
 pub mod diag;
 pub mod driver;
 pub mod fmt;
+pub mod gvn;
 pub mod hir;
 pub mod ir;
+pub mod cfg;
 pub mod lexer;
+pub mod licm;
 #[cfg(feature = "legacy-backends")]
 pub mod llvm;
 pub mod lower;

@@ -541,9 +541,11 @@ impl Asm {
         self.op(prefix, w, &[0x0F, opcode], reg, rm, false);
     }
 
+    /// Register-to-register move. `movaps` copies the whole register, so unlike `movsd` it has no
+    /// dependency on the destination's previous contents.
     pub fn movsd_rr(&mut self, dst: Reg, src: Reg) {
         if dst != src {
-            self.sse(0xF2, false, 0x10, dst, Rm::R(src));
+            self.sse(0, false, 0x28, dst, Rm::R(src));
         }
     }
     pub fn movsd_load(&mut self, dst: Reg, m: Mem) {
