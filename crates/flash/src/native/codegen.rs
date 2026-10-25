@@ -95,6 +95,8 @@ pub struct Fixups {
     pub calls: Vec<(usize, u32)>,
     pub data: Vec<(usize, u32)>,
     pub pool: Vec<(usize, usize)>,
+    /// (position of a rel32 operand, import slot): `call [rip+rel32]` through the import table (Windows)
+    pub iat: Vec<(usize, u32)>,
 }
 
 #[derive(Default)]
@@ -181,6 +183,9 @@ impl<'m> Cg<'m> {
                     let tys = self.call_param_tys(f, callee, args)?;
                     let n = classify(&tys).iter().filter(|l| matches!(l, ArgLoc::Stack(_))).count() as i32;
                     out_args = out_args.max(8 * n);
+                    if matches!(callee, Callee::Syscall) && self.target.os == super::Os::Windows {
+                        out_args = out_args.max(8 * 7); // shadow space (4 words) + three stack arguments
+                    }
                 }
             }
         }
@@ -1509,6 +1514,25 @@ impl<'m> Cg<'m> {
 
     // -------------------------------------------------------------- calls
     fn call(&mut self, st: &FnState, dst: Option<VReg>, callee: &Callee, args: &[VReg]) -> Result<(), String> {
+        if let (Callee::Syscall, super::Os::Windows) = (callee, self.target.os) {
+            // args[0] = import slot, args[1..] = up to seven arguments of a Win64 call: rcx, rdx,
+            // r8, r9, then the stack above the 32-byte shadow space.
+            let Opd::I(slot) = self.opd(st, args[0]) else { return Err("Windows import numbers must be constants".into()) };
+            const WIN_REGS: [Reg; 4] = [RCX, RDX, R8, R9];
+            let mut moves = vec![];
+            for (i, a) in args[1..].iter().enumerate() {
+                let d = if i < 4 { IDst::R(WIN_REGS[i]) } else { IDst::M(Mem::at(RSP, 32 + 8 * (i as i32 - 4))) };
+                moves.push((d, self.isrc(st, *a)));
+            }
+            self.par_move_int(moves);
+            self.a.buf.extend_from_slice(&[0xFF, 0x15, 0, 0, 0, 0]); // call qword ptr [rip+rel32]
+            let at = self.a.pos() - 4;
+            self.fix.iat.push((at, slot as u32));
+            if let Some(d) = dst {
+                self.commit_int(st, d, RAX);
+            }
+            return Ok(());
+        }
         if let Callee::Syscall = callee {
             // args[0] = number, args[1..] = up to six arguments in rdi, rsi, rdx, r10, r8, r9.
             const SYS_REGS: [Reg; 6] = [RDI, RSI, RDX, R10, R8, R9];

@@ -33,7 +33,7 @@ name_len = len(unwrap_or(read_file("/definitely/not/here.txt"), "fallback"))
 say(name_len)
 
 # Files: write, append, read back
-path = "/tmp/flash_results_test.txt"
+path = "flash_results_test.txt"
 write_file(path, "line one\n")?
 append_file(path, "line two\n")?
 text = read_file(path)?

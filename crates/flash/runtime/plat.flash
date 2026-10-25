@@ -2,14 +2,18 @@
 #
 # Everything the runtime needs from the operating system goes through these functions, so that
 # porting Flash to another OS means changing this file (and the code generator's system-call
-# sequence). `__os()` (0 = Linux, 1 = macOS) and `__arch()` (0 = x86-64, 1 = AArch64) are compile-time constants, so the branches below
+# sequence). `__os()` (0 = Linux, 1 = macOS, 2 = Windows) and `__arch()` (0 = x86-64, 1 = AArch64) are compile-time constants, so the branches below
 # disappear in the generated program. All functions return a negative errno on failure, using
 # the Linux numbering for the few errors whose numbers differ (see pl_errno).
+#
+# On Windows (`__os() == 2`) every function forwards to win.flash.
 #
 # macOS system-call numbers are the BSD ones; the code generator adds the class bits (0x2000000)
 # and turns the kernel's carry-flag error convention into "negative errno".
 
 fn pl_write(fd: Int, buf: Int, n: Int) -> Int:
+    if __os() == 2:
+        return win_write(fd, buf, n)
     if __os() == 1:
         return __syscall(4, fd, buf, n, 0, 0, 0)
     if __arch() == 1:
@@ -17,6 +21,8 @@ fn pl_write(fd: Int, buf: Int, n: Int) -> Int:
     return __syscall(1, fd, buf, n, 0, 0, 0)
 
 fn pl_read(fd: Int, buf: Int, n: Int) -> Int:
+    if __os() == 2:
+        return win_read(fd, buf, n)
     if __os() == 1:
         return __syscall(3, fd, buf, n, 0, 0, 0)
     if __arch() == 1:
@@ -25,6 +31,8 @@ fn pl_read(fd: Int, buf: Int, n: Int) -> Int:
 
 # mode: 0 = read, 1 = write (create, truncate), 2 = append (create)
 fn pl_open(path: Int, mode: Int) -> Int:
+    if __os() == 2:
+        return win_open(path, mode)
     if __os() == 1:
         flags = 0
         if mode == 1:
@@ -42,6 +50,9 @@ fn pl_open(path: Int, mode: Int) -> Int:
     return __syscall(2, path, flags, 438, 0, 0, 0)
 
 fn pl_close(fd: Int):
+    if __os() == 2:
+        win_close(fd)
+        return
     if __os() == 1:
         __syscall(6, fd, 0, 0, 0, 0, 0)
     elif __arch() == 1:
@@ -51,6 +62,8 @@ fn pl_close(fd: Int):
 
 # Anonymous read-write memory of n bytes, or 0.
 fn pl_mmap(n: Int) -> Int:
+    if __os() == 2:
+        return win_mmap(n)
     r = 0
     if __os() == 1:
         r = __syscall(197, 0, n, 3, 4098, -1, 0)
@@ -63,6 +76,9 @@ fn pl_mmap(n: Int) -> Int:
     return r
 
 fn pl_munmap(p: Int, n: Int):
+    if __os() == 2:
+        win_munmap(p)
+        return
     if __os() == 1:
         __syscall(73, p, n, 0, 0, 0, 0)
     elif __arch() == 1:
@@ -72,6 +88,8 @@ fn pl_munmap(p: Int, n: Int):
 
 # 0 if the file exists.
 fn pl_access(path: Int) -> Int:
+    if __os() == 2:
+        return win_access(path)
     if __os() == 1:
         return __syscall(33, path, 0, 0, 0, 0, 0)
     if __arch() == 1:
@@ -79,6 +97,8 @@ fn pl_access(path: Int) -> Int:
     return __syscall(21, path, 0, 0, 0, 0, 0)
 
 fn pl_unlink(path: Int) -> Int:
+    if __os() == 2:
+        return win_unlink(path)
     if __os() == 1:
         return __syscall(10, path, 0, 0, 0, 0, 0)
     if __arch() == 1:
@@ -86,6 +106,9 @@ fn pl_unlink(path: Int) -> Int:
     return __syscall(87, path, 0, 0, 0, 0, 0)
 
 fn pl_exit(code: Int):
+    if __os() == 2:
+        win_exit(code)
+        return
     if __os() == 1:
         __syscall(1, code, 0, 0, 0, 0, 0)
     elif __arch() == 1:
@@ -95,6 +118,8 @@ fn pl_exit(code: Int):
 
 # A clock in nanoseconds: monotonic on Linux, the wall clock (microsecond resolution) on macOS.
 fn pl_clock_ns() -> Int:
+    if __os() == 2:
+        return win_clock_ns()
     ts = __state() + 1500
     if __os() == 1:
         __syscall(116, ts, 0, 0, 0, 0, 0)
@@ -106,6 +131,9 @@ fn pl_clock_ns() -> Int:
     return __peek(ts, 0) * 1000000000 + __peek(ts, 8)
 
 fn pl_sleep_ms(ms: Int):
+    if __os() == 2:
+        win_sleep_ms(ms)
+        return
     ts = __state() + 1500
     if __os() == 1:
         __poke(ts, 0, ms / 1000)

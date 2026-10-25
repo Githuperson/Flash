@@ -611,6 +611,58 @@ fn inline_small_functions(m: &mut Module) {
             break;
         }
     }
+    // Small self-recursive functions: expand each recursive call once (the copy's own recursive
+    // calls stay calls). Halves the number of calls and prologues of e.g. naive Fibonacci.
+    for fi in 0..m.funcs.len() {
+        let f = &m.funcs[fi];
+        if f.exported || f.no_inline || inst_count(f) > RECURSIVE_UNROLL_LIMIT || !calls_func(f, fi as u32) || has_syscall(f) {
+            continue;
+        }
+        let mut f = std::mem::replace(&mut m.funcs[fi], placeholder());
+        unroll_recursion_once(&mut f, fi as u32);
+        m.funcs[fi] = f;
+    }
+}
+
+const RECURSIVE_UNROLL_LIMIT: usize = 40;
+const SELF_MARK: u32 = u32::MAX - 1;
+
+fn unroll_recursion_once(f: &mut Function, self_idx: u32) {
+    let mut copy = f.clone();
+    for b in &mut copy.blocks {
+        for inst in &mut b.insts {
+            if let Inst::Call { callee: Callee::Func(c), .. } = inst {
+                if *c == self_idx {
+                    *c = SELF_MARK; // calls inside the copy are not expanded again
+                }
+            }
+        }
+    }
+    'outer: loop {
+        for bi in 0..f.blocks.len() {
+            if matches!(f.blocks[bi].term, Term::Unreachable) {
+                continue;
+            }
+            for ii in 0..f.blocks[bi].insts.len() {
+                let Inst::Call { dst, callee: Callee::Func(c), args } = f.blocks[bi].insts[ii].clone() else { continue };
+                if c != self_idx {
+                    continue;
+                }
+                splice(f, bi, ii, dst, &args, &copy);
+                continue 'outer;
+            }
+        }
+        break;
+    }
+    for b in &mut f.blocks {
+        for inst in &mut b.insts {
+            if let Inst::Call { callee: Callee::Func(c), .. } = inst {
+                if *c == SELF_MARK {
+                    *c = self_idx;
+                }
+            }
+        }
+    }
 }
 
 fn placeholder() -> Function {

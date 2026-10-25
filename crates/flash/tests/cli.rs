@@ -10,7 +10,7 @@ fn help_and_version_succeed_and_unknown_command_is_a_usage_error() {
     assert_eq!(flash(&[]).status.code(), Some(0));
     let v = flash(&["--version"]);
     assert_eq!(v.status.code(), Some(0));
-    assert!(text(&v.stdout).starts_with("flash 0.1"));
+    assert!(text(&v.stdout).starts_with("flash 0.2"));
     assert_eq!(flash(&["frobnicate"]).status.code(), Some(2));
     assert_eq!(flash(&["run"]).status.code(), Some(2)); // missing file
     assert_eq!(flash(&["build", "x.flash", "--bogus"]).status.code(), Some(2));
@@ -151,14 +151,14 @@ fn flash_test_runs_test_functions_and_reports_failures() {
 #[cfg(feature = "legacy-backends")]
 #[test]
 fn cross_compilation_emits_objects_for_other_platforms() {
-    // Linking needs a target toolchain, but the code generator can produce objects for each target.
+    // The native back end writes complete executables for these targets (no linker involved).
     let src = repo_root().join("examples/functions.flash");
     let dir = scratch_dir("cli-targets");
     let cases: [(&str, &[u8]); 4] = [
         ("aarch64-apple-darwin", &[0xcf, 0xfa, 0xed, 0xfe]), // Mach-O 64-bit little endian
         ("x86_64-apple-darwin", &[0xcf, 0xfa, 0xed, 0xfe]),
         ("aarch64-unknown-linux-gnu", b"\x7fELF"),
-        ("x86_64-pc-windows-msvc", &[0x64, 0x86]), // COFF machine type AMD64
+        ("x86_64-pc-windows-msvc", b"MZ"), // the native back end writes a complete PE executable
     ];
     for (target, magic) in cases {
         for release in [false, true] {

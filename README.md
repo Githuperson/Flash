@@ -28,6 +28,7 @@ for i in 0..3:                  # 0, 1, 2   (the upper bound is excluded; use 0.
 
 > **Status: v0.2, a working prototype.** The compiler, runtime, formatter, test runner and local package manager work and are covered by automated tests — on **Linux x86-64**, which is the only platform this was built and run on.
 > The **macOS x86-64** target (`--target x86_64-apple-darwin`; also runs on Apple Silicon through Rosetta 2) is implemented, and the files it writes are checked with LLVM's Mach-O reader, but **it has never been run on a Mac**.
+> The native back end also writes **Windows x86-64** executables (`--target x86_64-pc-windows-msvc` → PE32+ console program that imports a few functions from `kernel32.dll`; no C runtime). They are run in an emulator that implements those kernel32 functions (`scripts/run_win.py`) and, in CI, natively on a GitHub Windows runner; **until that CI job has been seen to pass, treat Windows as untested on real Windows.**
 > The native back end also writes **AArch64** executables (`--target aarch64-unknown-linux-gnu` → static ELF, `--target aarch64-apple-darwin` → ad-hoc-signed, dynamic position-independent Mach-O for Apple Silicon, because current macOS kills static executables). The Linux one has been run only in a CPU emulator (Unicorn, `scripts/run_a64.py`), where the examples, float/math runtime tests and four benchmarks print exactly what the x86-64 builds print. The macOS one **runs on a GitHub-hosted Apple Silicon runner (macOS 26) in CI, and the whole test suite passes there**. Neither has been tried on real Linux ARM hardware or on a personal Mac. Performance: measured, not claimed (see [Performance](#performance)): Flash's own code generator is within 1.1–2.3× of Rust on six of the eight benchmarks,
 > faster on the two allocation-heavy ones, and slower than LLVM-compiled code on `fib` and `matmul`.
 
@@ -65,7 +66,8 @@ The script downloads the prebuilt archive for your platform (Linux x86-64, macOS
 `flash` finds its standard library relative to its own location, so no environment variables are needed. `./uninstall.sh` removes everything.
 
 * **From a checkout:** `./install.sh` builds from source (`FLASH_FROM_SOURCE=1` forces that for the curl form too).
-* **Publishing a release (maintainers):** `git tag v0.1.0 && git push origin v0.1.0` runs `.github/workflows/release.yml`, which builds the three archives with `scripts/package.sh` and attaches them to a GitHub release.
+* **Publishing a release (maintainers):** `git tag v0.2.0 && git push origin v0.2.0` runs `.github/workflows/release.yml`, which builds archives for Linux x86-64, Linux arm64, macOS Apple Silicon and Windows x86-64 with `scripts/package.sh`, smoke-tests each one (the packaged compiler must build and run a program) and attaches them to a GitHub release. A tag with a hyphen (`v0.2.0-rc1`) is published as a pre-release.
+* **Windows:** download `flash-windows-x86_64.zip` from the releases page, unzip it, and add its `bin` folder to `PATH` (`install.sh` is for Linux and macOS). The compiler needs no other tools. Any release archive can also cross-compile: `flash build prog.flash --target x86_64-pc-windows-msvc`.
   **That workflow has never run**, and the one-line installer only works once this code is on `main` and a release exists; the Linux archive and the download/checksum/unpack path were tested locally against a local web server, macOS archives were not.
 * The plugin examples are not part of the archive; build them from a checkout (below).
 
@@ -153,7 +155,7 @@ How to write, build (Linux, macOS, Windows) and load plugins, the ownership rule
 Flash runtime it uses (compiled from Flash source into the same file), a small constant pool. What it needs from the system: the Linux kernel (or macOS kernel) — it makes raw system calls and has no dynamic section
 (`ldd` reports "not a dynamic executable"). Executables are target specific: one file per OS and CPU; the macOS one has never been executed (see Status).
 
-Limits of this path, all reported as clear errors: no `extern fn` / `--link` / native plugins (they need a C ABI; use `--features legacy-backends`), Linux and macOS on x86-64 only, no Windows.
+Limits of this path, all reported as clear errors: no `extern fn` / `--link` / native plugins (they need a C ABI; use `--features legacy-backends`), targets: Linux x86-64/AArch64, macOS x86-64/arm64 and Windows x86-64 (Windows ARM is not supported).
 
 ## Static linking
 
@@ -226,17 +228,17 @@ Flash (native) run time divided by Rust / C++ run time (above 1.00 means Flash i
 
 | benchmark | native / rust | native / c++ -O3 | llvm\* / rust |
 |---|---|---|---|
-| int_loop | 1.22x | 1.06x | 1.07x |
-| fib | 1.76x | 3.20x | 0.91x |
-| mandelbrot | 1.11x | 1.08x | 1.05x |
-| sieve | 1.20x | 1.26x | 0.97x |
-| strings | 0.74x | 0.94x | 0.97x |
-| alloc | 0.31x | 0.63x | 0.91x |
-| nbody | 1.59x | 1.02x | 1.57x |
-| matmul | 2.24x | 3.39x | 1.08x |
+| int_loop | 1.23x | 1.07x | 1.07x |
+| fib | 0.93x | 1.45x | 0.91x |
+| mandelbrot | 1.15x | 1.15x | 1.05x |
+| sieve | 1.11x | 1.24x | 0.97x |
+| strings | 0.59x | 0.61x | 0.97x |
+| alloc | 0.34x | 0.93x | 0.91x |
+| nbody | 1.95x | 1.58x | 1.57x |
+| matmul | 2.39x | 3.58x | 1.08x |
 
-**What this does and does not show.** Flash's own code generator is within roughly 10–25% of Rust on three programs, 1.6–1.8× on `nbody` and `fib`, and 2.2× on `matmul`; it is faster than Rust on `strings` and `alloc`, which are dominated by
-allocation (Flash's allocator is a few inlined instructions; the Rust/C++ programs use glibc `malloc`, so this compares allocators as much as compilers). LLVM still generates better code for `fib` and `matmul`.
+**What this does and does not show.** Flash's own code generator is within roughly 10–25% of Rust on four programs, on par with Rust on `fib` (the optimiser expands a small self-recursive function once, halving the calls), about 1.6–2× on `nbody` and 2.4× on `matmul`; (the native columns were re-measured after that change, the LLVM column is from the earlier run; timings on this shared machine vary by 10–30% between runs); it is faster than Rust on `strings` and `alloc`, which are dominated by
+allocation (Flash's allocator is a few inlined instructions; the Rust/C++ programs use glibc `malloc`, so this compares allocators as much as compilers). LLVM still generates better code for `matmul`, and C++ -O3 unrolls `fib` further.
 Flash is **not** shown to be faster than Rust or C++ on compute workloads: Flash checks list indexes, structs are heap blocks, there is no vectorisation, and the benchmarks are small single-machine measurements.
 A native-only Flash executable needs 0.3 MiB of memory for a trivial program (Rust: 2.2 MiB) and is tens of KiB in size.
 

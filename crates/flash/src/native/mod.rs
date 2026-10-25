@@ -14,6 +14,7 @@ mod codesign;
 mod magic;
 mod elf;
 mod macho;
+mod pe;
 pub mod link;
 mod regalloc;
 
@@ -23,6 +24,7 @@ use crate::ir::*;
 pub enum Os {
     Linux = 0,
     MacOs = 1,
+    Windows = 2,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -38,7 +40,7 @@ pub struct Target {
     pub arch: Arch,
 }
 
-const SUPPORTED: &str = "x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu, x86_64-apple-darwin, aarch64-apple-darwin";
+const SUPPORTED: &str = "x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu, x86_64-apple-darwin, aarch64-apple-darwin, x86_64-pc-windows-msvc";
 
 impl Target {
     /// The machine the compiler runs on, if the native back end supports it.
@@ -54,6 +56,8 @@ impl Target {
             Os::Linux
         } else if cfg!(target_os = "macos") {
             Os::MacOs
+        } else if cfg!(target_os = "windows") && arch == Arch::X86_64 {
+            Os::Windows
         } else {
             return None;
         };
@@ -72,6 +76,8 @@ impl Target {
         };
         let os = if t.contains("linux") {
             Os::Linux
+        } else if t.contains("windows") && arch == Arch::X86_64 {
+            Os::Windows
         } else if t.contains("darwin") || t.contains("apple") || t.contains("macos") {
             Os::MacOs
         } else {
@@ -83,7 +89,7 @@ impl Target {
     /// (image base, page size) of the executables written for this target.
     fn image_params(self) -> (u64, u64) {
         match (self.os, self.arch) {
-            (Os::Linux, Arch::X86_64) | (Os::MacOs, Arch::X86_64) => (elf::BASE, elf::PAGE),
+            (Os::Linux, Arch::X86_64) | (Os::MacOs, Arch::X86_64) | (Os::Windows, _) => (elf::BASE, elf::PAGE),
             (Os::Linux, Arch::Aarch64) => (0x40_0000, 0x4000),
             (Os::MacOs, Arch::Aarch64) => (0x1_0000_0000, 0x4000),
         }
@@ -114,6 +120,8 @@ struct Code {
     data_fix_adrp: Vec<(usize, u32)>,
     /// (position of the call instruction, callee): relative calls
     calls: Vec<(usize, u32)>,
+    /// (position of a rip-relative operand, import slot): calls through the import table (Windows)
+    iat_fix: Vec<(usize, u32)>,
 }
 
 fn emit_x86(m: &Module, target: Target, entry_idx: usize) -> Result<Code, String> {
@@ -143,6 +151,7 @@ fn emit_x86(m: &Module, target: Target, entry_idx: usize) -> Result<Code, String
         data_fix_abs: fix.data,
         data_fix_adrp: vec![],
         calls: fix.calls,
+        iat_fix: fix.iat,
     })
 }
 
@@ -168,7 +177,7 @@ fn emit_a64(m: &Module, target: Target, entry_idx: usize) -> Result<Code, String
     }
     cg.a.resolve_labels()?;
     let a64gen::Cg { a, fix, .. } = cg;
-    Ok(Code { text: a.buf, starts, ends, entry: 0, pool: vec![], pool_fix: vec![], data_fix_abs: vec![], data_fix_adrp: fix.data, calls: fix.calls })
+    Ok(Code { text: a.buf, starts, ends, entry: 0, pool: vec![], pool_fix: vec![], data_fix_abs: vec![], data_fix_adrp: fix.data, calls: fix.calls, iat_fix: vec![] })
 }
 
 /// Compile a fully linked module (no unresolved externs) into an executable file image.
@@ -217,6 +226,17 @@ pub fn compile(mut m: Module, target: Target) -> Result<Vec<u8>, String> {
         }
     }
     let (base, page) = target.image_params();
+    // Windows: the import tables live at the end of the read-only data. The read-only data starts
+    // right after the code, so its address is known before the final layout.
+    let mut imports: Option<(pe::ImportBlock, u64)> = None;
+    if target.os == Os::Windows {
+        let ro_rva = elf::layout(base, page, code.text.len() as u64, 0, 0).rodata - base;
+        rodata.resize(align(rodata.len() as u64, 16) as usize, 0);
+        let off = rodata.len() as u64;
+        let block = pe::import_block(ro_rva + off);
+        rodata.extend_from_slice(&block.bytes);
+        imports = Some((block, off));
+    }
     let lay = elf::layout(base, page, code.text.len() as u64, rodata.len() as u64, data.len() as u64);
     let data_addr = |id: u32| -> u64 {
         let (sec, off) = item_loc[id as usize];
@@ -274,6 +294,17 @@ pub fn compile(mut m: Module, target: Target) -> Result<Vec<u8>, String> {
         }
     }
 
+    if let Some((block, off)) = &imports {
+        let iat_addr = lay.rodata + off + block.iat_off as u64;
+        for (at, slot) in &code.iat_fix {
+            if *slot as usize >= pe::IMPORTS.len() {
+                return Err(format!("internal error: unknown Windows import number {}", slot));
+            }
+            let target_addr = iat_addr + 8 * *slot as u64;
+            let rel = target_addr as i64 - (lay.text as i64 + *at as i64 + 4);
+            code.text[*at..*at + 4].copy_from_slice(&(rel as i32).to_le_bytes());
+        }
+    }
     let symbols: Vec<elf::Symbol> = m
         .funcs
         .iter()
@@ -281,10 +312,14 @@ pub fn compile(mut m: Module, target: Target) -> Result<Vec<u8>, String> {
         .map(|(i, f)| elf::Symbol { name: f.name.clone(), addr: lay.text + code.starts[i] as u64, size: (code.ends[i] - code.starts[i]) as u64 })
         .collect();
     let img = elf::Image { text: &code.text, rodata: &rodata, data: &data, bss, entry: lay.text + code.entry as u64, symbols: &symbols };
+    if let Some((block, off)) = &imports {
+        return Ok(pe::write(&img, &lay, (off + block.dir_off as u64, block.dir_size as u64), (off + block.iat_off as u64, 8 * (pe::IMPORTS.len() as u64 + 1))));
+    }
     Ok(match (target.os, target.arch) {
         (Os::Linux, Arch::X86_64) => elf::write(&img, &lay, elf::Machine::X86_64),
         (Os::Linux, Arch::Aarch64) => elf::write(&img, &lay, elf::Machine::Aarch64),
         (Os::MacOs, Arch::X86_64) => macho::write(&img, &lay, macho::Arch::X86_64, "a.out"),
         (Os::MacOs, Arch::Aarch64) => macho::write(&img, &lay, macho::Arch::Arm64, "a.out"),
+        (Os::Windows, _) => unreachable!("written above"),
     })
 }

@@ -10,6 +10,7 @@ use crate::ir::*;
 pub fn runtime_source() -> String {
     [
         include_str!("../../runtime/plat.flash"),
+        include_str!("../../runtime/win.flash"),
         include_str!("../../runtime/sys.flash"),
         include_str!("../../runtime/text.flash"),
         include_str!("../../runtime/float.flash"),
@@ -22,7 +23,7 @@ pub fn runtime_source() -> String {
 /// Compile the runtime library to IR.
 pub fn lower_runtime(target: super::Target) -> Result<Module, String> {
     let fe = crate::driver::frontend_runtime("<flash runtime>", &runtime_source())?;
-    Ok(crate::lower::lower_runtime(&fe.program, target.os as i64 | (target.arch as i64) << 1))
+    Ok(crate::lower::lower_runtime(&fe.program, target.os as i64 | (target.arch as i64) << 2))
 }
 
 fn shift_function(f: &mut Function, fbase: u32, dbase: u32) {
@@ -97,7 +98,7 @@ pub fn link(mut user: Module, mut rt: Module, release: bool) -> Result<Module, S
     crate::opt::remove_unused_functions(&mut user);
     crate::opt::optimise(&mut user, release && std::env::var_os("FLASH_DEBUG_NOINLINE").is_none());
     if let Some(name) = std::env::var_os("FLASH_DEBUG_DUMP") {
-        for f in user.funcs.iter().filter(|f| f.name == name.to_string_lossy()) {
+        for f in user.funcs.iter().filter(|f| name == "*" || f.name == name.to_string_lossy()) {
             eprintln!("{}", Module { funcs: vec![f.clone()], ..Default::default() });
         }
     }

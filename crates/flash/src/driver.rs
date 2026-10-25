@@ -664,9 +664,9 @@ fn build_legacy(
         return Err(format!("{}\n", e));
     }
     Err(format!(
-        "this build of Flash contains only the native back end (Linux x86-64, no `extern fn`, no plugins){}.\nThe optional Cranelift/LLVM back ends are compiled in with `cargo build --features legacy-backends`.\n",
+        "this build of Flash contains only the native back end, which supports neither `extern fn`, plugins nor C libraries{}.\nThe optional Cranelift/LLVM back ends are compiled in with `cargo build --features legacy-backends`.\n",
         match opts.target.as_deref() {
-            Some(t) => format!(", so it cannot target '{}'", t),
+            Some(t) => format!(" (target '{}')", t),
             None => String::new(),
         }
     ))

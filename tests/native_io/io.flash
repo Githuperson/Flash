@@ -1,0 +1,19 @@
+# Arguments, environment, files, standard input and the exit code.
+# Run as:  io a "b c" d   with the line "input line" on standard input; exits with code 3.
+a = args()
+say(len(a))
+for x in a:
+    say("arg:", x)
+say(is_ok(env_var("PATH")))
+path = "flash_native_io_test.tmp"
+unwrap(write_file(path, "hello\nworld\n"))
+say(file_exists(path))
+t = unwrap(read_file(path))
+say(len(t), t)
+unwrap(append_file(path, "more\n"))
+say(len(unwrap(read_file(path))))
+unwrap(remove_file(path))
+say(file_exists(path))
+say(is_ok(read_file("no_such_file_here.txt")))
+say("got:", read_line())
+exit(3)

@@ -1,24 +1,49 @@
-# Builds binary archives when a version tag is pushed:   git tag v0.1.0 && git push origin v0.1.0
-# NOTE: written but never run by the author; first run happens on the first tag.
+# Builds binary archives when a version tag is pushed:   git tag v0.2.0 && git push origin v0.2.0
+# or when started by hand (Actions > release > Run workflow) with the tag to create: the release
+# action then creates the tag at the commit the workflow runs on.
+# Each platform builds the compiler natively and checks that the packaged compiler can build and
+# run a program before the archive is published.
 name: release
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to create for the release (for example v0.2.0)"
+        required: true
 permissions:
   contents: write
 jobs:
   build:
     strategy:
+      fail-fast: false
       matrix:
         include:
-          - { os: ubuntu-latest, target: linux-x86_64 }
-          - { os: macos-14,      target: macos-aarch64 }
-          - { os: macos-13,      target: macos-x86_64 }
+          - { os: ubuntu-latest,    target: linux-x86_64 }
+          - { os: ubuntu-24.04-arm, target: linux-aarch64 }
+          - { os: macos-latest,     target: macos-aarch64 }
+          - { os: windows-latest,   target: windows-x86_64 }
     runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - run: scripts/package.sh ${{ matrix.target }}
+      - name: Smoke test the archive
+        run: |
+          mkdir smoke && cd smoke
+          case "${{ matrix.target }}" in
+            windows-*) powershell -NoProfile -Command "Expand-Archive -Path ../dist/flash-${{ matrix.target }}.zip -DestinationPath ." ; exe=.exe ;;
+            *) tar -xzf ../dist/flash-${{ matrix.target }}.tar.gz ; exe= ;;
+          esac
+          ./bin/flash$exe --version
+          echo 'say("Hello from the release archive")' > hello.flash
+          ./bin/flash$exe build hello.flash --release -o hello$exe
+          ./hello$exe | tee out.txt
+          test "$(cat out.txt)" = "Hello from the release archive"
       - uses: actions/upload-artifact@v4
         with: { name: "${{ matrix.target }}", path: dist/* }
   publish:
@@ -28,4 +53,9 @@ jobs:
       - uses: actions/download-artifact@v4
         with: { path: dist, merge-multiple: true }
       - uses: softprops/action-gh-release@v2
-        with: { files: dist/*, generate_release_notes: true }
+        with:
+          files: dist/*
+          generate_release_notes: true
+          tag_name: ${{ inputs.tag || github.ref_name }}
+          target_commitish: ${{ github.sha }}
+          prerelease: ${{ contains(inputs.tag || github.ref_name, '-') }}
