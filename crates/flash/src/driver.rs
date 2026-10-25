@@ -415,9 +415,11 @@ mod legacy_link {
                 cmd.arg("-s");
             }
         } else if cfg!(target_os = "macos") {
-            cmd.args(["-lm", "-framework", "Security"]);
+            // No frameworks: Rust's std only needs libSystem, and every extra dylib costs process start-up time.
+            // `-dead_strip` is cheap and shrinks dev builds too; release additionally drops local symbols and debug maps.
+            cmd.args(["-lm", "-Wl,-dead_strip"]);
             if opts.release {
-                cmd.arg("-Wl,-dead_strip");
+                cmd.args(["-Wl,-x", "-Wl,-S"]);
             }
         }
         for a in &opts.link_args {
