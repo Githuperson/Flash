@@ -23,18 +23,22 @@ def main():
         ncmds = struct.unpack_from('<I', data, 16)[0]
         off = 32
         entry = None
+        main_off = None
+        text_base = None
         for _ in range(ncmds):
             cmd, size = struct.unpack_from('<II', data, off)
             if cmd == 0x19:
                 name = data[off + 8:off + 24].rstrip(b'\0')
                 vmaddr, vmsize, fileoff, filesize = struct.unpack_from('<QQQQ', data, off + 24)
+                if name == b'__TEXT':
+                    text_base = vmaddr
                 if name != b'__PAGEZERO':
                     segs.append((vmaddr, vmsize, fileoff, filesize))
-            elif cmd == 0x5:
-                flavor, count = struct.unpack_from('<II', data, off + 8)
-                entry = struct.unpack_from('<Q', data, off + 16 + 32 * 8)[0]
+            elif cmd == 0x80000028:  # LC_MAIN: entry offset from the start of __TEXT
+                main_off = struct.unpack_from('<Q', data, off + 8)[0]
             off += size
-        assert entry is not None
+        assert main_off is not None, 'no LC_MAIN'
+        entry = text_base + main_off
     else:
         assert data[:4] == b'\x7fELF' and struct.unpack_from('<H', data, 18)[0] == 183, "not an aarch64 ELF"
         entry = struct.unpack_from('<Q', data, 24)[0]
@@ -151,7 +155,10 @@ def main():
 
     mu.hook_add(UC_HOOK_INTR, sysc)
     if macos:
-        mu.reg_write(UC_ARM64_REG_SP, sp)
+        # like dyld: call main(argc, argv, envp) with the original stack
+        mu.reg_write(UC_ARM64_REG_X0, len(args))
+        mu.reg_write(UC_ARM64_REG_X1, sp + 8)
+        mu.reg_write(UC_ARM64_REG_X2, sp + 8 + 8 * (len(args) + 1))
     try:
         mu.emu_start(entry, 0)
     except UcError as e:

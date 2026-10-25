@@ -149,8 +149,13 @@ fn emit_x86(m: &Module, target: Target, entry_idx: usize) -> Result<Code, String
 fn emit_a64(m: &Module, target: Target, entry_idx: usize) -> Result<Code, String> {
     let mut cg = a64gen::Cg::new(m, target);
     // Process entry: pass the initial stack pointer (argc, argv, envp) to the runtime.
-    //   mov x0, sp ; bl fl_start ; brk #0
-    cg.a.mov_sp(0, a64::SP);
+    //   mov x0, sp ; bl fl_start ; brk #0          (Linux: the kernel's initial stack)
+    //   sub x0, x1, #8 ; bl fl_start ; brk #0      (macOS: dyld calls main(argc, argv, ...); argc is the word before argv)
+    if target.os == Os::MacOs {
+        cg.a.sub_imm(0, 1, 8);
+    } else {
+        cg.a.mov_sp(0, a64::SP);
+    }
     let at = cg.a.bl_patch();
     cg.fix.calls.push((at, entry_idx as u32));
     cg.a.brk(0);

@@ -23,33 +23,20 @@ jobs:
           echo "== codesign verify"; codesign -dvvv flash_hello 2>&1; codesign --verify --verbose=4 flash_hello 2>&1
           echo "== otool -l (flash)"; otool -l flash_hello | head -120
           echo "== kernel log"; sudo log show --last 2m --info --debug --predicate 'eventMessage CONTAINS[c] "flash_hello" OR process == "kernel" AND eventMessage CONTAINS[c] "AMFI"' 2>&1 | tail -40
-          cat > ref.s <<'ASM'
-          .globl _main
-          .p2align 2
-          _main:
-            mov x0, #0
-            mov x16, #1
-            svc #0x80
-          ASM
-          sed -i 's/^          //' ref.s
+          printf '.globl _main\n.p2align 2\n_main:\n  mov x0, #0\n  mov x16, #1\n  svc #0x80\n' > ref.s
           echo "== reference dynamic (libSystem), raw svc exit"
           clang -o ref_dyn ref.s && ./ref_dyn; echo "rc=$?"
-          otool -l ref_dyn | grep -E "cmd |flags|magic" | head -40
-          echo "== reference static, no libSystem"
-          cat > st.s <<'ASM'
-          .globl _start
-          .p2align 2
-          _start:
-            mov x0, #5
-            mov x16, #1
-            svc #0x80
-          ASM
-          sed -i 's/^          //' st.s
-          clang -c st.s -o st.o && ld -static -arch arm64 -e _start -o ref_static st.o 2>&1 | head -5
-          ./ref_static; echo "static rc=$?"
-          codesign -dvvv ref_static 2>&1 | head -12
-          otool -l ref_static | head -80
-          echo "== no libSystem dynamic-less with LC_MAIN"
-          ld -arch arm64 -e _start -o ref_nolib st.o -platform_version macos 11.0 11.0 2>&1 | head -5
-          ./ref_nolib; echo "nolib rc=$?"
-          otool -hv ref_nolib; otool -l ref_nolib | grep -E "cmd |dylinker|name" | head -30
+          otool -l ref_dyn | grep -A6 -E "CHAINED|EXPORTS|SYMTAB|LOAD_DYLIB|LC_MAIN|LC_BUILD"
+          echo "== reference chained fixups / trie bytes"
+          dyldinfo -export ref_dyn 2>&1 | head -5
+          python3 - <<'PY'
+          import struct,subprocess
+          d=open('ref_dyn','rb').read()
+          n=struct.unpack_from('<I',d,16)[0]; off=32
+          for _ in range(n):
+              c,sz=struct.unpack_from('<II',d,off)
+              if c in (0x80000034,0x80000033,0x2):
+                  o,l=struct.unpack_from('<II',d,off+8)
+                  print(hex(c),'at',o,'len',l, d[o:o+min(l,96)].hex())
+              off+=sz
+          PY
