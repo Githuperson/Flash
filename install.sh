@@ -8,8 +8,9 @@
 #   Straight from GitHub: curl -sSf https://raw.githubusercontent.com/Githuperson/Flash/main/install.sh | sh
 #
 # Installs into $FLASH_HOME (default ~/.flash):
-#   bin/flash  bin/flashpkg  lib/libflash_rt.a  stdlib/  include/
-# Needs: a Rust toolchain (https://rustup.rs), git (only for the curl form) and a C compiler (`cc`).
+#   bin/flash  bin/flashpkg  stdlib/  include/
+# Needs (only to build from source): a Rust toolchain (https://rustup.rs) and git (curl form).
+# Compiling Flash programs needs no C compiler, linker or libc.
 # Options (environment): FLASH_HOME=dir  FLASH_REPO=url  FLASH_REF=branch  FLASH_PROFILE=release|debug
 #   FLASH_RELEASE_URL=base url of the release files   FLASH_FROM_SOURCE=1
 set -eu
@@ -37,7 +38,6 @@ finish() {
        echo "(put that line in ~/.zshrc or ~/.bashrc to make it permanent)" ;;
   esac
   echo "Try it:  echo 'say(\"Hello, world!\")' > hello.flash && flash run hello.flash"
-  echo "(Installing flash needs a C compiler on your machine to link programs: cc)"
   exit 0
 }
 
@@ -67,7 +67,6 @@ if [ "$in_checkout" = 0 ] && [ -z "${FLASH_FROM_SOURCE:-}" ]; then
 fi
 
 need cargo "Install Rust from https://rustup.rs (or install a release archive)."
-need cc "Install a C compiler (Xcode command line tools on macOS, build-essential on Debian/Ubuntu)."
 
 # Use the checkout we are in, otherwise clone.
 SRC=""
@@ -85,12 +84,11 @@ fi
 echo "Building Flash ($FLASH_PROFILE)... this takes a few minutes the first time."
 FLAG="--release"; DIR=release
 if [ "$FLASH_PROFILE" = "debug" ]; then FLAG=""; DIR=debug; fi
-(cd "$SRC" && cargo build $FLAG -p flash -p flash-rt --quiet)
+(cd "$SRC" && cargo build $FLAG -p flash --quiet)
 
 TARGET="${CARGO_TARGET_DIR:-$SRC/target}/$DIR"
-mkdir -p "$FLASH_HOME/bin" "$FLASH_HOME/lib"
+mkdir -p "$FLASH_HOME/bin"
 cp "$TARGET/flash" "$TARGET/flashpkg" "$FLASH_HOME/bin/"
-cp "$TARGET/libflash_rt.a" "$TARGET/flash-stub" "$FLASH_HOME/lib/"
 rm -rf "$FLASH_HOME/stdlib" "$FLASH_HOME/include"
 cp -R "$SRC/stdlib" "$FLASH_HOME/stdlib"
 cp -R "$SRC/include" "$FLASH_HOME/include"

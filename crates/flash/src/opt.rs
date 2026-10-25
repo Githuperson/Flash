@@ -24,6 +24,8 @@ pub fn optimise(m: &mut Module, release: bool) {
     lap("simplify", &mut t);
     if release {
         inline_small_functions(m);
+        // Functions that were just inlined everywhere are not worth optimising any further.
+        remove_unused_functions(m);
         lap("inline", &mut t);
         for f in &mut m.funcs {
             simplify(f);

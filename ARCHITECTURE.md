@@ -13,15 +13,18 @@ plugins see [PLUGIN_ABI.md](PLUGIN_ABI.md).
     manifests)                                                                       instances
                                    ┌──────────────────────────────────────────────────────────────┘
                                    ▼
-                             lowering ──► IR ──► optimiser ──► code generator ──► object file ──► linker ──► executable
-                          (drops, flags,   CFG over    const-fold, copy-prop,    Cranelift (default)        `cc` + libflash_rt.a
-                           temps, glue,    virtual     DCE, CFG cleanup,         or LLVM text → clang
-                           bounds checks)  registers   inlining (release)
+                             lowering ──► IR ──► optimiser ──► native back end ──► executable file
+                          (drops, flags,   CFG over    const-fold, copy-prop,    instruction selection,    ELF (Linux) or
+                           temps, glue,    virtual     DCE, jump threading,      register allocation,      Mach-O (macOS),
+                           bounds checks)  registers   inlining, GVN, LICM       machine code + runtime    written directly
 ```
 
+The default path contains no other program: no assembler, linker, C compiler, C library or LLVM. The optional legacy back ends (Cranelift,
+LLVM via `clang`) can be compiled in with `--features legacy-backends`; they are described in §5.2.
+
 The front end (everything up to and including the borrow checker) knows nothing about machine code. The IR is the
-only interface to the back ends, so another code generator is "just" another `fn(&ir::Module) -> object bytes`;
-two exist today.
+only interface to the back ends, so another code generator is "just" another `fn(&ir::Module) -> bytes`;
+three exist today (native, and the optional Cranelift and LLVM ones).
 
 ## 2. Source layout
 
@@ -37,13 +40,15 @@ two exist today.
 | `borrowck.rs` | flow-sensitive move analysis, aliasing and loop-lock checks |
 | `ir.rs`, `rtsigs.rs` | low-level IR; signatures of runtime functions |
 | `lower.rs`, `lower_builtins.rs` | HIR → IR, including every ownership-driven drop |
-| `opt.rs` | IR optimisation passes |
-| `codegen.rs` | Cranelift back end; `llvm.rs` — LLVM text back end |
+| `opt.rs`, `gvn.rs`, `licm.rs`, `cfg.rs` | IR optimisation passes (cleanup, inlining, value numbering, loop-invariant motion), CFG and dominators |
+| `native/` | **the default back end**: `asm.rs` x86-64 encoder, `regalloc.rs` live-range register allocator, `codegen.rs` instruction selection, `addrfold.rs`, `magic.rs` (division by constants), `link.rs` (runtime merge), `elf.rs` / `macho.rs` file writers |
+| `crates/flash/runtime/*.flash` | the runtime library, written in Flash (see §6) |
+| `codegen.rs`, `llvm.rs` | optional legacy back ends (feature `legacy-backends`): Cranelift, LLVM text via `clang` |
 | `plugins.rs` | plugin manifest parsing and the descriptor embedded in executables |
 | `fmt.rs` | token-based formatter (`flash fmt`) |
 | `pkg.rs`, `bin/flashpkg.rs` | package manager |
 | `main.rs` | the `flash` command-line tool |
-| `crates/flash-rt` | the runtime library linked into every program (strings, lists, I/O, plugin loader) |
+| `crates/flash-rt` | the optional legacy runtime (Rust static library) used only by the legacy back ends, plugins and `extern fn` |
 | `crates/flash-plugin-sdk` | ABI structures and the `flash_plugin!` macro for Rust plugins |
 | `include/flash_plugin.h`, `.hpp` | the same for C and C++ |
 | `stdlib/` | standard library modules written in Flash |
@@ -84,9 +89,8 @@ plus the call-aliasing check and the "list is being iterated" lock. The soundnes
 ## 4. Middle end
 
 ### IR (`ir.rs`)
-A control-flow graph of basic blocks over **mutable virtual registers** (not SSA — the Cranelift frontend builds SSA, LLVM gets `alloca`s that `mem2reg`
-promotes). Machine types only: `I8 I16 I32 I64 F64`; pointers are `I64`; booleans are `I8`. Instructions: constants, copy, binary/unary/compare, casts, load/store with offset,
-call (function / runtime import), address of static data or a stack slot, select. Terminators: jump, conditional branch, return, unreachable.
+A control-flow graph of basic blocks over **mutable virtual registers** (not SSA; the optimiser numbers *values* instead, and the register allocator works on live ranges). Machine types only: `I8 I16 I32 I64 F64`; pointers are `I64`; booleans are `I8`. Instructions: constants, copy, binary/unary/compare, casts, load/store with offset,
+call (function / runtime import / raw system call), address of static data or a stack slot, select. Terminators: jump, conditional branch, return, unreachable.
 
 ### Lowering (`lower.rs`) — where ownership becomes code
 * **Heap layouts:** `String = [len][cap][bytes…]` in one allocation (`cap == -1` marks read-only literals, which are never freed);
@@ -101,51 +105,74 @@ call (function / runtime import), address of static data or a stack slot, select
 * **Drop and clone glue** are synthesised per type on demand as IR functions (`List[Struct{String,…}]` loops over the elements, drops each field, frees the buffers); recursion through types is handled by reserving the function slot before generating the body.
 * **Checks:** list indexing is bounds checked (`index <u len`, one unsigned compare); integer division and remainder test for zero and for `MIN / -1`; both call small panic blocks.
 * **Bounds-check elimination:** `xs[i]` inside `for i in 0..len(xs)` loses its check if the loop body provably does not change `xs` (no `append`/`pop`/assignment/move/`mut` argument) or `i`.
-* **Alias classes:** loads and stores of list lengths, list data pointers, list elements (by machine type) and struct fields carry a `MemTag`. The LLVM back end turns tags into TBAA metadata and the Cranelift back end into alias regions, so a store to a `Float` element or a field no longer forces a reload of the list header; this alone made matrix multiplication 2.2× faster under LLVM (see `benchmarks/RESULTS.md`).
+* **Alias classes:** loads and stores of list lengths, list data pointers, list elements (by machine type) and struct fields carry a `MemTag`. The native optimiser (value numbering, loop-invariant motion) treats different tags as non-aliasing and untagged accesses as aliasing everything, so a store to a `Float` element or a field no longer forces a reload of the list header; the LLVM back end turns tags into TBAA metadata.
 * **Plugins:** a call builds a `FlashValue[]` in a stack slot and calls `fl_plugin_call`; a fallible function wraps the status into a `Result`.
 * **`extern fn`:** a call to a C-ABI function widens integers to 64 bits, passes a `String` as `(ptr + 16, len)` and normalises a `Bool` result; the linker resolves the symbol (`--link`, `-l`, `-L`).
 
-### Optimiser (`opt.rs`)
-Per function, iterated to a fixed point: constant folding and propagation of single-definition constants; copy propagation; algebraic identities; folding of branches on constants;
-jump threading over empty blocks; merging of straight-line blocks; unreachable-block removal; dead-code elimination of pure instructions. In **release** builds additionally: **inlining** of small
-(≤ 60 instructions), non-recursive, non-exported functions (including drop glue), repeated for up to three rounds, followed by another cleanup; unused functions are then removed.
-Dev builds run the cleanup passes only (they are cheap and the Cranelift verifier is on).
+### Optimiser (`opt.rs`, `gvn.rs`, `licm.rs`)
+Per function, iterated to a fixed point: constant folding and propagation of single-definition constants; local and global copy propagation; copy folding (`t = a + b; x = t` computes straight into `x`); algebraic identities;
+folding of branches on constants; jump threading over empty blocks and over branches on copies of an already-tested condition (this restores plain control flow for `a and b`); merging of straight-line blocks;
+unreachable-block removal; dead-code elimination of pure instructions, using block liveness so that assignments that are overwritten before being read disappear too.
+Loops are **rotated** (a jump to a tiny test-and-branch block is replaced by a copy of the test) so a loop runs with a single conditional branch per iteration.
 
-## 5. Back ends and the backend decision
+In **release** builds additionally:
+* **inlining** of small (≤ 60 instructions), non-recursive, non-exported functions, repeated for up to three rounds. Calls on paths that end in `unreachable` (panics) are never inlined, and neither are functions that contain system calls (slow paths);
+* **global value numbering over the dominator tree** (`gvn.rs`): registers map to value ids, equal computations become copies, loads are keyed by (base value, offset, alias tag) and the tag's *epoch*, which stores of the same tag, calls and untagged stores advance;
+  a store forwards its value to later loads of the same address; a branch whose condition is known from a dominating branch becomes a jump (repeated bounds checks disappear). At joins and loop headers everything that can change on a path from the dominator is forgotten first;
+* **loop-invariant code motion** (`licm.rs`): natural loops get a preheader; invariant arithmetic and loads of memory the loop cannot write (by alias tag), in blocks every loop exit passes through, move there; the invariant *prefix* of a loop body (leading blocks that only compute invariant values and test invariant conditions against panic paths) is peeled in front of the loop.
 
-| | Cranelift (default) | LLVM via `clang` (`--backend llvm`) |
+Dev builds run the cleanup passes only. The native back end's last IR pass, **address folding**, rewrites `p = base + i*8; load [p+off]` into one indexed load/store.
+
+## 5. Back ends
+
+### 5.1 The native back end (default)
+
+`flash build` turns the optimised IR directly into an executable. Nothing else runs: no assembler, linker, C compiler, C library or LLVM, and the output depends on no library
+(`ldd` says "not a dynamic executable"; a hello-world is about 13 KB).
+
+* **Register allocation** (`native/regalloc.rs`): blocks are laid out in reverse post-order with panic paths last; liveness is computed per block and turned into *live ranges with holes*
+  (so a value used only on a cold panic path does not occupy a register across the hot loop); vregs that are live across a call or system call may only use callee-saved registers; a linear scan assigns registers
+  by start position, spilling the cheapest conflicting value (use count weighted by loop depth) when none is free. Single-definition constants are never allocated: they become immediates or are rematerialised.
+* **Instruction selection** (`native/codegen.rs`): two-address forms with the destination coalesced where possible, comparison-and-branch fusion, `lea` for additions, constant divisors by multiplication with a magic number
+  (`magic.rs`, checked against hardware division by a unit test) or shifts, saturating float→integer conversions, `floor`/`ceil` without SSE4.1, narrow integers kept zero-extended in registers.
+* **Calling convention** (Flash's own, System-V-like): integer arguments in `rdi rsi rdx rcx r8 r9`, floats in `xmm0–7`, the rest on the stack; results in `rax`/`xmm0`; `rbx rbp r12–r15` and `xmm8–13` are callee-saved. Nothing outside the program calls into it, so no foreign ABI is involved.
+* **Files**: a static ELF (`elf.rs`: three `PT_LOAD` segments, non-executable stack, a symbol table for debuggers) for Linux, a static Mach-O (`macho.rs`: `__PAGEZERO`, `__TEXT`, `__DATA`, `LC_UNIXTHREAD`) for macOS x86-64.
+* **System calls**: Linux uses the `syscall` instruction directly; for macOS the code generator adds the BSD class bits and converts the carry-flag error convention to `-errno`.
+* **Not supported by this back end**: `extern fn`/`--link`, native plugins (both need a C ABI and dynamic loading — use the legacy back ends), Windows, 32-bit and (so far) AArch64.
+
+Measured behaviour: see `benchmarks/RESULTS.md`. Compile time is a few milliseconds of code generation plus the front end (the whole `flash build` of a small program takes 10–30 ms).
+
+### 5.2 Optional legacy back ends (`--features legacy-backends`)
+
+| | Cranelift | LLVM via `clang` (`--backend llvm`) |
 |---|---|---|
-| Integration | Rust crates, linked into `flash` | the compiler prints textual LLVM IR and runs `clang -O3 -c` |
-| System requirements | none beyond a C linker (`cc`) | `clang` at compile time |
-| Compile time of a small program | ~5 ms code generation | tens of ms (process start + LLVM pipeline) — see benchmarks |
-| Generated code | simple optimiser (egraph rules, GVN, LICM, no auto-vectorisation, little inlining) | LLVM -O3 |
-| Targets exercised here | object files for x86-64 Linux/macOS/Windows and AArch64 Linux/macOS | whatever the installed clang supports |
+| Integration | Rust crates linked into `flash`, output linked with `cc` and `flash-rt` | textual LLVM IR → `clang -O3 -c`, linked with `cc` |
+| Needed for | `extern fn`, `--link`, native plugins, targets other than the native back end's | the same, with better optimisation |
 
-**Decision record.** The task asks to evaluate both. Cranelift was chosen as the default because it is the only option that
-works with nothing but `cargo build`: it is a library, builds in about two and a half minutes together with the rest of the project, gives millisecond code generation
-(compile + link of a program takes ~0.1 s, dominated by the system linker) and supports AArch64 and x86-64 object output for Linux, macOS and Windows from the same
-build — which is what the macOS-ARM64-first goal needs. Using LLVM through the `llvm-sys`/`inkwell` crates would tie `cargo build` to a matching LLVM development
-installation (LLVM 18 is installed in this environment, but a user's machine may differ) and multiply build time. Because the IR is backend independent, an LLVM option for release builds
-was still worth having, so it is implemented without linking LLVM: `llvm.rs` prints textual IR (virtual registers as `alloca`, narrow integers `zeroext` for the C ABI, shifts masked to Flash's
-semantics, saturating float→int via intrinsics) and invokes `clang`. The test-suite runs every program through it when `clang` is present. Measured effect on run time: see `benchmarks/RESULTS.md`
-(the numbers are produced by `benchmarks/run.py`, nothing is hard-coded).
+They exist because the C ABI features cannot be provided by a standalone runtime, and as a cross-check: the test-suite runs every program through all back ends when they are compiled in.
+They are not built by default (`cargo build` compiles neither Cranelift nor the Rust runtime), and `Backend::Auto` only selects them when the program needs them.
 
-## 6. Runtime and linking
+**Decision record.** The project first used Cranelift (fast to build, objects for many targets) and optionally LLVM. Both produce code that depends on a C linker and on a Rust runtime library, which conflicts with the goal of
+standalone executables and a runtime that is not written in another language. The native back end replaces them for everything that does not need a C ABI. It is deliberately smaller than LLVM — no vectorisation, no
+instruction scheduling, simple register allocation — and the benchmarks show where that costs time.
 
-`crates/flash-rt` is a Rust `staticlib`/`rlib` that exports C-ABI functions (`fl_*`, listed with their signatures in `rtsigs.rs`) and the program's `main`, which records the
-arguments, calls the compiled `flash_main`, flushes buffered output and exits. It provides string and list primitives, number formatting, buffered output, file and path functions,
-the monotonic clock, process exit and runtime errors, and the **plugin loader** (`plugin.rs`; `libloading`, SHA-256 integrity check). An allocation counter reports live `fl_alloc`
-allocations at exit when `FLASH_RT_LEAKCHECK` is set — the test-suite uses it to assert that programs free everything.
+## 6. Runtime and executables
 
-Executables are linked with the system C compiler driver (`cc`, override with `FLASH_CC`): `cc program.o libflash_rt.a -lpthread -ldl -lm` on Linux, `-lm -framework Security` on macOS
-(Windows linking is not implemented). The runtime library is found next to the `flash` executable (`target/<profile>/libflash_rt.a`) or built on demand with
-`cargo build -p flash-rt` in a development checkout. The output is a normal native executable: no interpreter, no bytecode, no JIT; plugins are the only run-time dependency and only if the program uses them.
+The runtime library is **written in Flash** (`crates/flash/runtime/*.flash`, embedded in the compiler with `include_str!`): memory allocator, strings, lists, integer and float formatting and parsing, math functions, files, paths,
+environment, time, standard input and output, panics. It is compiled by the same pipeline as the user's program (with a few privileged `__` intrinsics for raw memory access, system calls, the address of its global state block and the
+target OS, which only runtime code may use), merged with the program's IR, pruned to what is reachable, and optimised together with it. That is why `fl_alloc`'s free-list fast path inlines into user code.
 
-### Built-in linker (Linux x86-64)
-`crates/flash-rt/src/bin/flash-stub.rs` is the runtime as an executable without a program. `driver::link_builtin` writes `[stub][ELF object from Cranelift][len][b"FLASHPAY"]`;
-`flash_rt::loader` finds the payload in `/proc/self/exe`, maps sections (code first, then data and a GOT), builds 16-byte `jmp *` veneers for far runtime calls,
-resolves undefined symbols through `flash_rt::symbols::lookup` (a table of every `fl_*` function; a test checks it covers `rtsigs.rs`), applies `R_X86_64_64/PC32/PLT32/GOTPCREL(X)` relocations, marks the code read+execute and calls `flash_main`.
-Unsupported: other architectures/object formats, `extern fn` libraries, the LLVM backend (all fall back to `cc`).
+* `plat.flash` — the platform layer: every operating-system request (read, write, open, mmap, exit, clock, sleep…) with the per-OS system-call numbers and flags; `__os()` is a compile-time constant, so only the code for the target remains.
+* `sys.flash` — output buffering, panics, the **allocator** (size classes of 16 bytes up to 1 KiB, then powers of two up to 1 MiB, free lists per class, 4 MiB chunks from `mmap`; larger blocks are mapped directly; `fl_free` is given the size, so blocks have no header) and the process entry (`fl_start`).
+* `text.flash` — strings, lists, results, integer parsing. `float.flash` — shortest-round-trip float printing (a fast path for short decimals, Dragon4 on a small big-number library otherwise) and correctly rounded parsing. `math.flash` — `exp ln sin cos tan pow`
+  ported from the classic fdlibm algorithms, with an exact Payne–Hanek argument reduction for huge angles. `io.flash` — files, paths, environment, time, standard input.
+* An allocation counter reports live blocks at exit when `FLASH_RT_LEAKCHECK` is set — the test-suite uses it to assert that programs free everything.
+
+`crates/flash/tests/native_runtime.rs` checks float printing/parsing and the math functions against Rust's standard library on thousands of random inputs (math: at most 1 ulp from libm on the tested inputs).
+
+Known differences from the previous Rust runtime: `upper`/`lower` change ASCII letters only; floating-point `parse` accepts what Rust's does; paths are handled as bytes; on macOS `now_ns` uses the wall clock with microsecond resolution.
+
+The legacy runtime (`crates/flash-rt`, a Rust static library, with the plugin loader and the `flash-stub` loader) is only used with `--features legacy-backends`.
 
 ## 7. Tooling
 
@@ -158,13 +185,14 @@ Unsupported: other architectures/object formats, `extern fn` libraries, the LLVM
 
 | Platform | Status |
 |---|---|
-| Linux x86-64 | **built, tested, benchmarked** (all tests run here) |
-| Linux AArch64, macOS (x86-64, ARM64), Windows x86-64 | the code generator produces correct-format object files (`crates/flash/tests/cli.rs` checks the headers); **linking and running were not tested** — no such machines were available. macOS linking uses `cc … -lm -framework Security`; narrow integer arguments are zero-extended as the Apple ARM64 ABI requires |
-| Windows | the linker driver is not implemented; the plugin loader and library naming (`.dll`) are written but untested |
+| Linux x86-64 | **built, tested, benchmarked** with the native back end (all tests run here), and with the legacy back ends |
+| macOS x86-64 (Intel, and Apple Silicon through Rosetta 2) | the native back end writes a static Mach-O (`--target x86_64-apple-darwin`); its structure is checked with LLVM's Mach-O reader, **it has never been executed on a Mac** |
+| macOS ARM64, Linux AArch64 | not supported by the native back end yet; the legacy Cranelift back end produces objects linked with `cc` (untested) |
+| Windows | not supported (the legacy plugin loader and library naming are written but untested) |
 
 ## 9. Known limitations / roadmap
 
 Language: no tuples, maps, user generics, methods, closures, concurrency or `unsafe` (see LANGUAGE_SPEC §16). Compiler: no incremental compilation; generic function bodies are only checked when used;
-`?` leaks owned temporaries evaluated earlier in the same expression; native stack overflow is not detected; Cranelift output is slower than LLVM, by 1.0–2.5× on the benchmark programs (measured in `benchmarks/RESULTS.md`).
+`?` leaks owned temporaries evaluated earlier in the same expression; native stack overflow is not detected; the native back end is 1.0–2× slower than Rust on the compute benchmarks (see `benchmarks/RESULTS.md`), with no vectorisation.
 Next steps in rough priority order: tuples and maps; user generics/traits; reference locals (`ref x = xs[i]`) with the same rules as borrowed parameters; per-module caching; static linking of native libraries;
 process isolation for untrusted plugins; Windows/macOS CI; an LSP server built on the existing parser and checker; a thread-safe ownership model (`Send` transfer and channels).

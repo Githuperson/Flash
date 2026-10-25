@@ -176,40 +176,57 @@ fn summarize(f: &Function, cfg: &Cfg, l: &Loop) -> (Summary, Vec<usize>) {
 }
 
 pub fn licm(f: &mut Function) -> bool {
+    let cfg0 = cfg::build(f);
+    let mut loops = find_loops(f, &cfg0);
+    if loops.is_empty() {
+        return false;
+    }
     if std::env::var_os("FLASH_DEBUG_TIMES").is_some() {
-        let cfg = cfg::build(f);
-        eprintln!("    licm {}: {} blocks, {} vregs, {} loops", f.name, f.blocks.len(), f.vregs.len(), find_loops(f, &cfg).len());
+        eprintln!("    licm {}: {} blocks, {} vregs, {} loops", f.name, f.blocks.len(), f.vregs.len(), loops.len());
     }
     let mut changed = false;
-    let mut done_headers: Vec<usize> = vec![];
-    loop {
+    for idx in 0..loops.len() {
+        // Loops were found once, innermost first. Earlier work may have added preheader blocks.
+        let n = f.blocks.len();
+        for x in loops.iter_mut() {
+            x.body.resize(n, false);
+        }
         let cfg = cfg::build(f);
-        let loops = find_loops(f, &cfg);
-        // Next loop (innermost first) that has not been processed.
-        let Some(l) = loops.into_iter().find(|l| !done_headers.contains(&l.header)) else { break };
-        done_headers.push(l.header);
-        let Some(p) = preheader(f, &cfg, &l) else { continue };
+        let l = Loop { header: loops[idx].header, body: loops[idx].body.clone() };
+        if cfg.rpo_index[l.header] == usize::MAX {
+            continue;
+        }
+        let blocks_before = f.blocks.len();
+        let Some(_p) = preheader(f, &cfg, &l) else { continue };
         changed = true;
-        // Peel the invariant prefix of the loop body, then hoist from the loop that remains.
-        let (cfg, l) = match peel_invariant_prefix(f, &cfg, &l) {
-            Some(new_header) => {
-                done_headers.push(new_header);
-                let cfg2 = cfg::build(f);
-                match find_loops(f, &cfg2).into_iter().find(|x| x.header == new_header) {
-                    Some(l2) => (cfg2, l2),
-                    None => continue,
-                }
+        if f.blocks.len() > blocks_before {
+            // A new preheader sits inside every loop that contains this loop's header.
+            let h = l.header;
+            for x in loops.iter_mut() {
+                let inside = x.body[h];
+                x.body.push(inside);
             }
-            None => {
-                let cfg2 = cfg::build(f);
-                match find_loops(f, &cfg2).into_iter().find(|x| x.header == l.header) {
-                    Some(l2) => (cfg2, l2),
-                    None => continue,
+            // ...but not inside this loop itself.
+            loops[idx].body[blocks_before] = false;
+        }
+        let cfg = cfg::build(f);
+        let mut l = Loop { header: loops[idx].header, body: loops[idx].body.clone() };
+        // Peel the invariant prefix, then hoist from the loop that remains.
+        if let Some(new_header) = peel_invariant_prefix(f, &cfg, &l) {
+            // The peeled blocks left the loop; recompute its body from the new header.
+            let cfg2 = cfg::build(f);
+            match find_loops(f, &cfg2).into_iter().find(|x| x.header == new_header) {
+                Some(l2) => {
+                    loops[idx].header = new_header;
+                    loops[idx].body = l2.body.clone();
+                    l = l2;
+                    hoist_loop(f, &cfg2, &l);
                 }
+                None => continue,
             }
-        };
-        let _ = p;
-        hoist_loop(f, &cfg, &l);
+        } else {
+            hoist_loop(f, &cfg, &l);
+        }
     }
     changed
 }

@@ -74,6 +74,8 @@ fn macos_executables_are_well_formed_mach_o() {
     }
 }
 
+// (With the legacy back ends compiled in, Cranelift accepts more targets.)
+#[cfg(not(feature = "legacy-backends"))]
 #[test]
 fn cross_compiling_to_an_unsupported_target_is_a_clear_error() {
     let dir = scratch_dir("native-badtarget");

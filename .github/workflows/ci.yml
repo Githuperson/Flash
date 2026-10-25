@@ -1,6 +1,10 @@
 # Continuous integration. NOTE: this workflow was written together with the compiler but has not
-# been run by the author (the development environment was a single Linux x86-64 machine); the
-# macOS job is where the Apple Silicon / macOS linking path would first be exercised.
+# been run by the author (the development environment was a single Linux x86-64 machine).
+#  * "native": the default build, which contains only Flash's own back end (Linux x86-64, and
+#    macOS x86-64 on an Intel runner).
+#  * "legacy": additionally builds and tests the optional Cranelift/LLVM back ends, `extern fn`
+#    and plugins (needs a C compiler); this is the path for Apple Silicon until the AArch64
+#    native back end is validated on real hardware.
 name: ci
 on: [push, pull_request]
 
@@ -9,16 +13,21 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        include:
+          - { os: ubuntu-latest, flags: "",                           name: native }
+          - { os: ubuntu-latest, flags: "--features legacy-backends", name: legacy }
+          - { os: macos-13,      flags: "",                           name: native }
+          - { os: macos-latest,  flags: "--features legacy-backends", name: legacy }
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - name: Build
-        run: cargo build --workspace
+        run: cargo build -p flash ${{ matrix.flags }}
       - name: Build the C++ example plugin
+        if: matrix.name == 'legacy'
         run: make -C plugins/cpp/geometry
       - name: Test
-        run: cargo test --workspace
+        run: cargo test -p flash ${{ matrix.flags }}
       - name: Flash self-tests
         run: ./target/debug/flash test tests/flash
