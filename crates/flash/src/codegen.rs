@@ -19,8 +19,11 @@ use crate::ir::{self as fir, BinOp, Callee, CastOp, CmpOp, Inst, Term, Ty, UnOp}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum Backend {
-    /// Fast to compile; the default (pure Rust, no system dependencies).
+    /// Default: `--release` builds use LLVM when `clang` is installed (best run-time speed),
+    /// everything else, and release builds without clang, use Cranelift.
     #[default]
+    Auto,
+    /// Fast to compile (pure Rust, no system dependencies).
     Cranelift,
     /// Textual LLVM IR compiled by `clang`; slower to compile, better optimised code.
     Llvm,

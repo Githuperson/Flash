@@ -508,9 +508,22 @@ fn cache_key(fe: &Frontend, opts: &BuildOptions) -> String {
     h.finalize().iter().map(|b| format!("{:02x}", b)).collect()
 }
 
+/// Turn `Backend::Auto` into a concrete backend: LLVM for host release builds when clang exists.
+fn resolve_backend(opts: &BuildOptions) -> crate::codegen::Backend {
+    use crate::codegen::Backend;
+    match opts.backend {
+        Backend::Auto if opts.release && opts.target.is_none() && crate::llvm::find_clang().is_some() => Backend::Llvm,
+        Backend::Auto => Backend::Cranelift,
+        b => b,
+    }
+}
+
 /// Compile `src` into a native executable at the returned path.
 pub fn build(src: &Path, opts: &BuildOptions) -> Result<(PathBuf, BuildTimings), String> {
     let t0 = std::time::Instant::now();
+    let mut resolved = opts.clone();
+    resolved.backend = resolve_backend(opts);
+    let opts = &resolved;
     let fe = frontend(src, opts.source_suffix.as_deref())?;
     // Build cache: a hit skips lowering, code generation and linking.
     let cache_entry =

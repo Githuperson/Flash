@@ -79,7 +79,7 @@ def main():
         row = {"name": b, "impl": {}}
         variants = []
         variants.append(("flash-dev", [args.flash, "build", str(HERE / f"{b}.flash"), "-o", str(OUT / f"{b}_flash_dev")], OUT / f"{b}_flash_dev"))
-        variants.append(("flash-release", [args.flash, "build", str(HERE / f"{b}.flash"), "--release", "-o", str(OUT / f"{b}_flash_rel")], OUT / f"{b}_flash_rel"))
+        variants.append(("flash-release", [args.flash, "build", str(HERE / f"{b}.flash"), "--release", "--backend", "cranelift", "-o", str(OUT / f"{b}_flash_rel")], OUT / f"{b}_flash_rel"))
         if shutil.which("clang") or os.environ.get("FLASH_CLANG"):
             variants.append(("flash-release-llvm", [args.flash, "build", str(HERE / f"{b}.flash"), "--release", "--backend", "llvm", "-o", str(OUT / f"{b}_flash_llvm")], OUT / f"{b}_flash_llvm"))
         if rustc:
