@@ -501,10 +501,14 @@ fn cache_key(fe: &Frontend, opts: &BuildOptions) -> String {
     let mut h = Sha256::new();
     h.update(crate::VERSION.as_bytes());
     h.update(file_stamp(&std::env::current_exe().unwrap_or_default()).as_bytes());
+    // The native back end embeds its runtime in the compiler; only the legacy back ends link
+    // libflash_rt (and looking it up can build it, which must not change the key mid-way).
     #[cfg(feature = "legacy-backends")]
-    if let Ok(rt) = find_runtime(opts.release) {
-        h.update(rt.to_string_lossy().as_bytes());
-        h.update(file_stamp(&rt).as_bytes());
+    if opts.backend != crate::codegen::Backend::Native {
+        if let Ok(rt) = find_runtime(opts.release) {
+            h.update(rt.to_string_lossy().as_bytes());
+            h.update(file_stamp(&rt).as_bytes());
+        }
     }
     h.update(
         format!("{}|{:?}|{:?}|{:?}|{:?}", opts.release, opts.target, opts.backend, std::env::var("FLASH_CC").ok(), opts.link_args)
