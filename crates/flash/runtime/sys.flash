@@ -25,7 +25,7 @@ extern fn flash_main()
 fn sys_write_all(fd: Int, buf: Int, n: Int):
     done = 0
     while done < n:
-        r = __syscall(1, fd, buf + done, n - done, 0, 0, 0)
+        r = pl_write(fd, buf + done, n - done)
         if r == -4:
             continue
         if r <= 0:
@@ -33,14 +33,10 @@ fn sys_write_all(fd: Int, buf: Int, n: Int):
         done += r
 
 fn sys_exit(code: Int):
-    __syscall(231, code, 0, 0, 0, 0, 0)
+    pl_exit(code)
 
 fn sys_mmap(n: Int) -> Int:
-    # mmap(NULL, n, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0)
-    r = __syscall(9, 0, n, 3, 34, -1, 0)
-    if r < 0 and r > -4096:
-        return 0
-    return r
+    return pl_mmap(n)
 
 # ------------------------------------------------------------------ raw memory
 fn mem_copy(dst: Int, src: Int, n: Int):
@@ -223,7 +219,7 @@ fn free_slow(p: Int, size: Int):
     __poke(st, 24, __peek(st, 24) - 1)
     c = size_class(size)
     if c == 0:
-        __syscall(11, p, round_page(size), 0, 0, 0, 0)
+        pl_munmap(p, round_page(size))
         return
     head = st + 128 + c * 8
     __poke(p, 0, __peek(head, 0))

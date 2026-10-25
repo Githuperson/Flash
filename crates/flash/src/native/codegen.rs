@@ -126,6 +126,7 @@ impl Pool {
 }
 
 pub struct Cg<'m> {
+    target: super::Target,
     pub a: Asm,
     pub fix: Fixups,
     pub pool: Pool,
@@ -146,8 +147,8 @@ struct FnState<'f> {
 }
 
 impl<'m> Cg<'m> {
-    pub fn new(m: &'m Module) -> Cg<'m> {
-        Cg { a: Asm::new(), fix: Fixups::default(), pool: Pool::default(), m }
+    pub fn new(m: &'m Module, target: super::Target) -> Cg<'m> {
+        Cg { target, a: Asm::new(), fix: Fixups::default(), pool: Pool::default(), m }
     }
 
     fn pool_mem(&mut self, idx: usize) -> Mem {
@@ -1517,8 +1518,20 @@ impl<'m> Cg<'m> {
             }
             self.par_move_int(moves);
             let n = self.opd(st, args[0]);
-            self.load_opd(RAX, n);
-            self.a.syscall();
+            if self.target.os == super::Os::MacOs {
+                // BSD system calls are class 2: the number is 0x2000000 | n. The kernel reports an
+                // error with the carry flag and a positive errno; the runtime expects -errno.
+                let Opd::I(num) = n else { return Err("macOS system call numbers must be constants".into()) };
+                self.a.mov_ri(RAX, 0x200_0000 | num);
+                self.a.syscall();
+                let ok = self.a.new_label();
+                self.a.jcc(Cc::Ae, ok);
+                self.a.neg(Sz::Q, RAX);
+                self.a.bind(ok);
+            } else {
+                self.load_opd(RAX, n);
+                self.a.syscall();
+            }
             if let Some(d) = dst {
                 self.commit_int(st, d, RAX);
             }

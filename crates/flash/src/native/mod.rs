@@ -10,10 +10,59 @@ mod asm;
 mod codegen;
 mod magic;
 mod elf;
+mod macho;
 pub mod link;
 mod regalloc;
 
 use crate::ir::*;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Os {
+    Linux = 0,
+    MacOs = 1,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Arch {
+    X86_64,
+}
+
+/// What the generated executable runs on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Target {
+    pub os: Os,
+    pub arch: Arch,
+}
+
+impl Target {
+    /// The machine the compiler runs on, if the native back end supports it.
+    pub fn host() -> Option<Target> {
+        if cfg!(target_arch = "x86_64") && cfg!(target_os = "linux") {
+            Some(Target { os: Os::Linux, arch: Arch::X86_64 })
+        } else if cfg!(target_arch = "x86_64") && cfg!(target_os = "macos") {
+            Some(Target { os: Os::MacOs, arch: Arch::X86_64 })
+        } else {
+            None
+        }
+    }
+
+    pub fn parse(triple: &str) -> Result<Target, String> {
+        let t = triple.to_ascii_lowercase();
+        let arch = if t.starts_with("x86_64") || t.starts_with("amd64") {
+            Arch::X86_64
+        } else {
+            return Err(format!("the native back end cannot generate code for '{}' (supported: x86_64-unknown-linux-gnu, x86_64-apple-darwin)", triple));
+        };
+        let os = if t.contains("linux") {
+            Os::Linux
+        } else if t.contains("darwin") || t.contains("apple") || t.contains("macos") {
+            Os::MacOs
+        } else {
+            return Err(format!("the native back end cannot generate code for '{}' (supported: x86_64-unknown-linux-gnu, x86_64-apple-darwin)", triple));
+        };
+        Ok(Target { os, arch })
+    }
+}
 
 /// Name of the function the process entry point calls with the initial stack pointer.
 pub const ENTRY_FN: &str = "fl_start";
@@ -23,14 +72,14 @@ fn align(x: u64, a: u64) -> u64 {
 }
 
 /// Compile a fully linked module (no unresolved externs) into an ELF executable image.
-pub fn compile(mut m: Module) -> Result<Vec<u8>, String> {
+pub fn compile(mut m: Module, target: Target) -> Result<Vec<u8>, String> {
     for f in &mut m.funcs {
         addrfold::run(f);
     }
     let m = &m;
     let entry_idx =
         m.funcs.iter().position(|f| f.name == ENTRY_FN).ok_or_else(|| format!("internal error: the runtime has no `{}` function", ENTRY_FN))?;
-    let mut cg = codegen::Cg::new(m);
+    let mut cg = codegen::Cg::new(m, target);
 
     // Process entry: pass the initial stack pointer (argc, argv, envp) to the runtime.
     //   mov rdi, rsp ; and rsp, -16 ; call fl_start ; ud2
@@ -114,5 +163,8 @@ pub fn compile(mut m: Module) -> Result<Vec<u8>, String> {
         .map(|(i, f)| elf::Symbol { name: f.name.clone(), addr: lay.text + starts[i] as u64, size: (ends[i] - starts[i]) as u64 })
         .collect();
     let img = elf::Image { text: &text, rodata: &rodata, data: &data, bss, entry: lay.text + start_off as u64, symbols: &symbols };
-    Ok(elf::write(&img))
+    Ok(match target.os {
+        Os::Linux => elf::write(&img),
+        Os::MacOs => macho::write(&img),
+    })
 }

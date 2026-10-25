@@ -1,0 +1,107 @@
+# Flash runtime library, part 0: the platform layer.
+#
+# Everything the runtime needs from the operating system goes through these functions, so that
+# porting Flash to another OS means changing this file (and the code generator's system-call
+# sequence). `__os()` is a compile-time constant (0 = Linux, 1 = macOS), so the branches below
+# disappear in the generated program. All functions return a negative errno on failure, using
+# the Linux numbering for the few errors whose numbers differ (see pl_errno).
+#
+# macOS system-call numbers are the BSD ones; the code generator adds the class bits (0x2000000)
+# and turns the kernel's carry-flag error convention into "negative errno".
+
+fn pl_write(fd: Int, buf: Int, n: Int) -> Int:
+    if __os() == 1:
+        return __syscall(4, fd, buf, n, 0, 0, 0)
+    return __syscall(1, fd, buf, n, 0, 0, 0)
+
+fn pl_read(fd: Int, buf: Int, n: Int) -> Int:
+    if __os() == 1:
+        return __syscall(3, fd, buf, n, 0, 0, 0)
+    return __syscall(0, fd, buf, n, 0, 0, 0)
+
+# mode: 0 = read, 1 = write (create, truncate), 2 = append (create)
+fn pl_open(path: Int, mode: Int) -> Int:
+    if __os() == 1:
+        flags = 0
+        if mode == 1:
+            flags = 1537
+        elif mode == 2:
+            flags = 521
+        return __syscall(5, path, flags, 438, 0, 0, 0)
+    flags = 0
+    if mode == 1:
+        flags = 577
+    elif mode == 2:
+        flags = 1089
+    return __syscall(2, path, flags, 438, 0, 0, 0)
+
+fn pl_close(fd: Int):
+    if __os() == 1:
+        __syscall(6, fd, 0, 0, 0, 0, 0)
+    else:
+        __syscall(3, fd, 0, 0, 0, 0, 0)
+
+# Anonymous read-write memory of n bytes, or 0.
+fn pl_mmap(n: Int) -> Int:
+    r = 0
+    if __os() == 1:
+        r = __syscall(197, 0, n, 3, 4098, -1, 0)
+    else:
+        r = __syscall(9, 0, n, 3, 34, -1, 0)
+    if r < 0 and r > -4096:
+        return 0
+    return r
+
+fn pl_munmap(p: Int, n: Int):
+    if __os() == 1:
+        __syscall(73, p, n, 0, 0, 0, 0)
+    else:
+        __syscall(11, p, n, 0, 0, 0, 0)
+
+# 0 if the file exists.
+fn pl_access(path: Int) -> Int:
+    if __os() == 1:
+        return __syscall(33, path, 0, 0, 0, 0, 0)
+    return __syscall(21, path, 0, 0, 0, 0, 0)
+
+fn pl_unlink(path: Int) -> Int:
+    if __os() == 1:
+        return __syscall(10, path, 0, 0, 0, 0, 0)
+    return __syscall(87, path, 0, 0, 0, 0, 0)
+
+fn pl_exit(code: Int):
+    if __os() == 1:
+        __syscall(1, code, 0, 0, 0, 0, 0)
+    else:
+        __syscall(231, code, 0, 0, 0, 0, 0)
+
+# A clock in nanoseconds: monotonic on Linux, the wall clock (microsecond resolution) on macOS.
+fn pl_clock_ns() -> Int:
+    ts = __state() + 1500
+    if __os() == 1:
+        __syscall(116, ts, 0, 0, 0, 0, 0)
+        return __peek(ts, 0) * 1000000000 + (__peek(ts, 8) & 4294967295) * 1000
+    __syscall(228, 1, ts, 0, 0, 0, 0)
+    return __peek(ts, 0) * 1000000000 + __peek(ts, 8)
+
+fn pl_sleep_ms(ms: Int):
+    ts = __state() + 1500
+    if __os() == 1:
+        __poke(ts, 0, ms / 1000)
+        __poke(ts, 8, (ms % 1000) * 1000)
+        __syscall(93, 0, 0, 0, 0, ts, 0)
+    else:
+        __poke(ts, 0, ms / 1000)
+        __poke(ts, 8, (ms % 1000) * 1000000)
+        __syscall(35, ts, 0, 0, 0, 0, 0)
+
+# Linux errno number for an error returned by the kernel.
+fn pl_errno(e: Int) -> Int:
+    if __os() == 1:
+        if e == 63:
+            return 36
+        if e == 66:
+            return 39
+        if e == 62:
+            return 40
+    return e

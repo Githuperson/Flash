@@ -47,9 +47,7 @@ fn fl_env_var(name: Int) -> Int:
 # ------------------------------------------------------------------ time
 fn fl_now_ns() -> Int:
     st = __state()
-    ts = st + 1500
-    __syscall(228, 1, ts, 0, 0, 0, 0)
-    now = __peek(ts, 0) * 1000000000 + __peek(ts, 8)
+    now = pl_clock_ns()
     start = __peek(st, 64)
     if start == 0:
         __poke(st, 64, now)
@@ -60,10 +58,7 @@ fn fl_sleep_ms(ms: Int):
     out_flush()
     if ms <= 0:
         return
-    ts = __state() + 1500
-    __poke(ts, 0, ms / 1000)
-    __poke(ts, 8, (ms % 1000) * 1000000)
-    __syscall(35, ts, 0, 0, 0, 0, 0)
+    pl_sleep_ms(ms)
 
 # ------------------------------------------------------------------ standard input
 fn fl_read_line() -> Int:
@@ -77,7 +72,7 @@ fn fl_read_line() -> Int:
         pos = __peek(st, 48)
         avail = __peek(st, 56)
         if pos >= avail:
-            r = __syscall(0, 0, buf, 16384, 0, 0, 0)
+            r = pl_read(0, buf, 16384)
             if r == -4:
                 continue
             if r <= 0:
@@ -156,7 +151,8 @@ fn cat_free(a: Int, b: Int) -> Int:
     return r
 
 # The error Result "cannot <what> '<path>': <why>".
-fn io_error(what: Int, path: Int, e: Int) -> Int:
+fn io_error(what: Int, path: Int, errno: Int) -> Int:
+    e = pl_errno(errno)
     m = fl_str_concat(__str("cannot "), what)
     m = cat_free(m, __str(" '"))
     m = cat_free(m, path)
@@ -177,7 +173,7 @@ fn io_error(what: Int, path: Int, e: Int) -> Int:
     return res_err(m)
 
 fn fl_read_file(path: Int) -> Int:
-    fd = __syscall(2, cpath(path), 0, 0, 0, 0, 0)
+    fd = pl_open(cpath(path), 0)
     if fd < 0:
         return io_error(__str("read"), path, 0 - fd)
     cap = 4096
@@ -190,55 +186,53 @@ fn fl_read_file(path: Int) -> Int:
             fl_free(data, cap)
             data = fresh
             cap = cap * 2
-        r = __syscall(0, fd, data + n, cap - n, 0, 0, 0)
+        r = pl_read(fd, data + n, cap - n)
         if r == -4:
             continue
         if r < 0:
-            __syscall(3, fd, 0, 0, 0, 0, 0)
+            pl_close(fd)
             fl_free(data, cap)
             return io_error(__str("read"), path, 0 - r)
         if r == 0:
             break
         n += r
-    __syscall(3, fd, 0, 0, 0, 0, 0)
+    pl_close(fd)
     s = str_new(data, n)
     fl_free(data, cap)
     return res_ok(s)
 
 # Writes all of text to the file; flags are the open(2) flags.
-fn write_to_file(path: Int, text: Int, flags: Int, what: Int) -> Int:
-    fd = __syscall(2, cpath(path), flags, 438, 0, 0, 0)
+fn write_to_file(path: Int, text: Int, mode: Int, what: Int) -> Int:
+    fd = pl_open(cpath(path), mode)
     if fd < 0:
         return io_error(what, path, 0 - fd)
     n = __peek(text, 0)
     done = 0
     while done < n:
-        r = __syscall(1, fd, text + 16 + done, n - done, 0, 0, 0)
+        r = pl_write(fd, text + 16 + done, n - done)
         if r == -4:
             continue
         if r <= 0:
-            __syscall(3, fd, 0, 0, 0, 0, 0)
+            pl_close(fd)
             e = 0 - r
             if r == 0:
                 e = 5
             return io_error(what, path, e)
         done += r
-    __syscall(3, fd, 0, 0, 0, 0, 0)
+    pl_close(fd)
     return res_ok(0)
 
 fn fl_write_file(path: Int, text: Int) -> Int:
-    # O_WRONLY | O_CREAT | O_TRUNC
-    return write_to_file(path, text, 577, __str("write"))
+    return write_to_file(path, text, 1, __str("write"))
 
 fn fl_append_file(path: Int, text: Int) -> Int:
-    # O_WRONLY | O_CREAT | O_APPEND
-    return write_to_file(path, text, 1089, __str("append to"))
+    return write_to_file(path, text, 2, __str("append to"))
 
 fn fl_file_exists(path: Int) -> Bool:
-    return __syscall(21, cpath(path), 0, 0, 0, 0, 0) == 0
+    return pl_access(cpath(path)) == 0
 
 fn fl_remove_file(path: Int) -> Int:
-    r = __syscall(87, cpath(path), 0, 0, 0, 0, 0)
+    r = pl_unlink(cpath(path))
     if r < 0:
         return io_error(__str("remove"), path, 0 - r)
     return res_ok(0)

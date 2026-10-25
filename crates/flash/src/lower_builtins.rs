@@ -508,6 +508,7 @@ impl<'a, 'p> FnLower<'a, 'p> {
                 self.emit(Inst::DataAddr { dst: d, data: id });
                 d
             }
+            "__os" => self.iconst(Ty::I64, self.lw.target_os),
             "__state" => {
                 let id = self.lw.state_data();
                 let d = self.vreg(Ty::I64);

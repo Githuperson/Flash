@@ -1,5 +1,7 @@
 //! Tests of the native x86-64 back end on hand-built IR (no runtime library involved).
 
+mod common;
+use common::*;
 use flashc::ir::*;
 use std::process::Command;
 
@@ -45,8 +47,37 @@ fn hello_through_raw_syscalls() {
     b.insts.push(Inst::Call { dst: None, callee: Callee::Syscall, args: vec![ex, code] });
     b.term = Term::Unreachable;
     m.funcs.push(f);
-    let elf = flashc::native::compile(m).unwrap();
+    let elf = flashc::native::compile(m, flashc::native::Target::host().unwrap()).unwrap();
     let (status, out) = run_elf(&elf, "hello");
     assert_eq!(status, 7);
     assert_eq!(out, "hi\n");
+}
+
+#[test]
+fn macos_executables_are_well_formed_mach_o() {
+    let dir = scratch_dir("native-macho");
+    let exe = dir.join("hello_mac");
+    let out = flash(&["build", repo_root().join("examples/hello.flash").to_str().unwrap(), "--target", "x86_64-apple-darwin", "-o", exe.to_str().unwrap()]);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let bytes = std::fs::read(&exe).unwrap();
+    assert_eq!(&bytes[..4], &[0xcf, 0xfa, 0xed, 0xfe], "Mach-O 64-bit magic");
+    assert_eq!(&bytes[4..8], &[0x07, 0x00, 0x00, 0x01], "CPU_TYPE_X86_64");
+    // When LLVM's tools are installed, let them parse the file and check the entry thread.
+    if let Ok(o) = Command::new("llvm-objdump").args(["--macho", "--private-headers"]).arg(&exe).output() {
+        let text = String::from_utf8_lossy(&o.stdout);
+        assert!(o.status.success(), "llvm-objdump rejected the file: {}", String::from_utf8_lossy(&o.stderr));
+        for needle in ["LC_UNIXTHREAD", "__PAGEZERO", "__TEXT", "__DATA", "x86_THREAD_STATE64"] {
+            assert!(text.contains(needle), "missing {} in:\n{}", needle, text);
+        }
+    } else {
+        eprintln!("note: llvm-objdump not installed; skipping the Mach-O structure check");
+    }
+}
+
+#[test]
+fn cross_compiling_to_an_unsupported_target_is_a_clear_error() {
+    let dir = scratch_dir("native-badtarget");
+    let out = flash(&["build", repo_root().join("examples/hello.flash").to_str().unwrap(), "--target", "riscv64-unknown-linux-gnu", "-o", dir.join("x").to_str().unwrap()]);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("cannot generate code for 'riscv64"), "{}", String::from_utf8_lossy(&out.stderr));
 }

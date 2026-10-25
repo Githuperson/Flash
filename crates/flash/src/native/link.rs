@@ -9,6 +9,7 @@ use crate::ir::*;
 /// The runtime library source: several files compiled as one module.
 pub fn runtime_source() -> String {
     [
+        include_str!("../../runtime/plat.flash"),
         include_str!("../../runtime/sys.flash"),
         include_str!("../../runtime/text.flash"),
         include_str!("../../runtime/float.flash"),
@@ -19,9 +20,9 @@ pub fn runtime_source() -> String {
 }
 
 /// Compile the runtime library to IR.
-pub fn lower_runtime() -> Result<Module, String> {
+pub fn lower_runtime(target: super::Target) -> Result<Module, String> {
     let fe = crate::driver::frontend_runtime("<flash runtime>", &runtime_source())?;
-    Ok(crate::lower::lower_runtime(&fe.program))
+    Ok(crate::lower::lower_runtime(&fe.program, target.os as i64))
 }
 
 fn shift_function(f: &mut Function, fbase: u32, dbase: u32) {

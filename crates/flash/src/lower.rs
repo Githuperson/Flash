@@ -49,19 +49,21 @@ pub struct Lowerer<'p> {
     tags: HashMap<String, MemTag>,
     /// Name functions exactly as written (the runtime library, whose `fl_*` functions are looked up by name).
     keep_names: bool,
+    /// Value of the runtime's `__os()` constant: 0 = Linux, 1 = macOS.
+    pub target_os: i64,
 }
 
 pub fn lower(prog: &Program) -> Module {
-    lower_with(prog, false)
+    lower_with(prog, false, 0)
 }
 
-/// Lower the runtime library: functions keep their source names.
-pub fn lower_runtime(prog: &Program) -> Module {
-    lower_with(prog, true)
+/// Lower the runtime library for an operating system: functions keep their source names.
+pub fn lower_runtime(prog: &Program, target_os: i64) -> Module {
+    lower_with(prog, true, target_os)
 }
 
-fn lower_with(prog: &Program, keep_names: bool) -> Module {
-    let mut lw = Lowerer { prog, m: Module::default(), strs: HashMap::new(), glue: HashMap::new(), tags: HashMap::new(), keep_names };
+fn lower_with(prog: &Program, keep_names: bool, target_os: i64) -> Module {
+    let mut lw = Lowerer { prog, m: Module::default(), strs: HashMap::new(), glue: HashMap::new(), tags: HashMap::new(), keep_names, target_os };
     lw.m.tags.push(String::new());
     // Reserve function slots so calls can refer to any function by index.
     for f in &prog.funcs {

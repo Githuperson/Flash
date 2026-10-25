@@ -539,8 +539,7 @@ fn resolve_backend(opts: &BuildOptions, program: &Program) -> crate::codegen::Ba
     use crate::codegen::Backend;
     match opts.backend {
         Backend::Auto => {
-            let native_ok = cfg!(all(target_os = "linux", target_arch = "x86_64"))
-                && opts.target.is_none()
+            let native_ok = native_target(opts).is_ok()
                 && opts.linker == Linker::Auto
                 && opts.link_args.is_empty()
                 && program.externs.is_empty()
@@ -566,7 +565,7 @@ pub fn build(src: &Path, opts: &BuildOptions) -> Result<(PathBuf, BuildTimings),
     let opts = &resolved;
     // Build cache: a hit skips lowering, code generation and linking.
     let cache_entry =
-        if opts.no_cache || opts.emit_ir || opts.emit_obj_only { None } else { cache_dir().map(|d| d.join(cache_key(&fe, opts))) };
+        if opts.no_cache || opts.emit_ir || (opts.emit_obj_only && opts.backend != crate::codegen::Backend::Native) { None } else { cache_dir().map(|d| d.join(cache_key(&fe, opts))) };
     let out = default_output(src, opts);
     if let Some(entry) = &cache_entry {
         if entry.is_file() && std::fs::copy(entry, &out).is_ok() {
@@ -574,7 +573,7 @@ pub fn build(src: &Path, opts: &BuildOptions) -> Result<(PathBuf, BuildTimings),
             return Ok((out, BuildTimings { frontend: t, backend: Default::default(), link: Default::default(), cached: true }));
         }
     }
-    if opts.backend == crate::codegen::Backend::Native && !opts.emit_obj_only {
+    if opts.backend == crate::codegen::Backend::Native {
         return build_native(&fe, opts, &out, cache_entry.as_deref(), t0);
     }
     build_legacy(&fe, opts, &out, cache_entry.as_deref(), t0)
@@ -655,6 +654,9 @@ fn build_legacy(
     _cache_entry: Option<&Path>,
     _t0: std::time::Instant,
 ) -> Result<(PathBuf, BuildTimings), String> {
+    if let Err(e) = native_target(opts) {
+        return Err(format!("{}\n", e));
+    }
     Err(format!(
         "this build of Flash contains only the native back end (Linux x86-64, no `extern fn`, no plugins){}.\nThe optional Cranelift/LLVM back ends are compiled in with `cargo build --features legacy-backends`.\n",
         match opts.target.as_deref() {
@@ -662,6 +664,15 @@ fn build_legacy(
             None => String::new(),
         }
     ))
+}
+
+/// The target the native back end generates code for: `--target`, else the machine we run on.
+fn native_target(opts: &BuildOptions) -> Result<crate::native::Target, String> {
+    match &opts.target {
+        Some(t) => crate::native::Target::parse(t),
+        None => crate::native::Target::host()
+            .ok_or_else(|| "the native back end runs on Linux and macOS on x86-64 only; pass --target x86_64-unknown-linux-gnu or x86_64-apple-darwin to cross-compile".to_string()),
+    }
 }
 
 /// Build with Flash's own back end: lower, link with the Flash-language runtime, emit an ELF file.
@@ -672,9 +683,7 @@ fn build_native(
     cache_entry: Option<&Path>,
     t0: std::time::Instant,
 ) -> Result<(PathBuf, BuildTimings), String> {
-    if !cfg!(all(target_os = "linux", target_arch = "x86_64")) || opts.target.is_some() {
-        return Err("the native back end supports Linux x86-64 only; use --backend cranelift for other targets\n".into());
-    }
+    let target = native_target(opts).map_err(|e| format!("{}\n", e))?;
     if !fe.program.externs.is_empty() || !fe.program.plugins.is_empty() || !opts.link_args.is_empty() {
         return Err("the native back end cannot link C libraries or plugins; use --backend cranelift or llvm for `extern fn`, --link and plugins\n".into());
     }
@@ -682,10 +691,10 @@ fn build_native(
     if opts.emit_ir {
         println!("{}", user);
     }
-    let rt = crate::native::link::lower_runtime().map_err(|e| format!("internal error in the runtime library:\n{}", e))?;
+    let rt = crate::native::link::lower_runtime(target).map_err(|e| format!("internal error in the runtime library:\n{}", e))?;
     let t1 = std::time::Instant::now();
     let module = crate::native::link::link(user, rt, opts.release).map_err(|e| format!("{}\n", e))?;
-    let elf = crate::native::compile(module).map_err(|e| format!("{}\n", e))?;
+    let elf = crate::native::compile(module, target).map_err(|e| format!("{}\n", e))?;
     let t2 = std::time::Instant::now();
     std::fs::write(out, &elf).map_err(|e| format!("cannot write {}: {}", out.display(), e))?;
     #[cfg(unix)]

@@ -83,6 +83,7 @@ pub const BUILTIN_NAMES: &[&str] = &[
     "__syscall",
     "__state",
     "__str",
+    "__os",
 ];
 
 pub fn is_builtin(name: &str) -> bool {
