@@ -12,10 +12,15 @@ on:
       tag:
         description: "Tag to create for the release (for example v0.2.0)"
         required: true
+      scripts_only:
+        description: "Only add install.ps1 and install.bat to the existing release with that tag (builds nothing, changes nothing else)"
+        type: boolean
+        default: false
 permissions:
   contents: write
 jobs:
   build:
+    if: ${{ !inputs.scripts_only }}
     strategy:
       fail-fast: false
       matrix:
@@ -52,14 +57,23 @@ jobs:
         with: { name: "${{ matrix.target }}", path: dist/* }
   publish:
     needs: build
+    if: ${{ !cancelled() && (needs.build.result == 'success' || needs.build.result == 'skipped') }}
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
+        if: ${{ !inputs.scripts_only }}
         with: { path: dist, merge-multiple: true }
+      # The Windows installer scripts are also attached on their own, so that
+      #   irm https://github.com/Githuperson/Flash/releases/latest/download/install.ps1 | iex
+      # works, and install.bat can be downloaded and double-clicked by itself.
       - uses: softprops/action-gh-release@v2
         with:
-          files: dist/*
-          generate_release_notes: true
+          files: |
+            dist/*
+            install.ps1
+            install.bat
+          generate_release_notes: ${{ !inputs.scripts_only }}
           tag_name: ${{ inputs.tag || github.ref_name }}
           target_commitish: ${{ github.sha }}
           prerelease: ${{ contains(inputs.tag || github.ref_name, '-') }}
