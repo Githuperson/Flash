@@ -1,4 +1,4 @@
-//! Tests of the native x86-64 back end on hand-built IR (no runtime library involved).
+//! Tests of the native back end on hand-built IR (no runtime library involved).
 
 mod common;
 use common::*;
@@ -31,23 +31,31 @@ fn blank(name: &str, params: Vec<Ty>, ret: Option<Ty>) -> Function {
 
 #[test]
 fn hello_through_raw_syscalls() {
+    use flashc::native::{Arch, Os, Target};
+    let target = Target::host().unwrap();
+    // (write, exit) system-call numbers of the host
+    let (sys_write, sys_exit) = match (target.os, target.arch) {
+        (Os::Linux, Arch::X86_64) => (1, 231),
+        (Os::Linux, Arch::Aarch64) => (64, 94),
+        (Os::MacOs, _) => (4, 1),
+    };
     let mut m = Module::default();
     m.data.push(DataItem { name: "msg".into(), bytes: b"hi\n".to_vec(), align: 1, writable: false });
     let mut f = blank("fl_start", vec![Ty::I64], None);
     let (n, fd, p, len, ex, code) = (f.new_vreg(Ty::I64), f.new_vreg(Ty::I64), f.new_vreg(Ty::I64), f.new_vreg(Ty::I64), f.new_vreg(Ty::I64), f.new_vreg(Ty::I64));
     let r = f.new_vreg(Ty::I64);
     let b = &mut f.blocks[0];
-    b.insts.push(Inst::IConst { dst: n, val: 1 });
+    b.insts.push(Inst::IConst { dst: n, val: sys_write });
     b.insts.push(Inst::IConst { dst: fd, val: 1 });
     b.insts.push(Inst::DataAddr { dst: p, data: 0 });
     b.insts.push(Inst::IConst { dst: len, val: 3 });
     b.insts.push(Inst::Call { dst: Some(r), callee: Callee::Syscall, args: vec![n, fd, p, len] });
-    b.insts.push(Inst::IConst { dst: ex, val: 231 });
+    b.insts.push(Inst::IConst { dst: ex, val: sys_exit });
     b.insts.push(Inst::IConst { dst: code, val: 7 });
     b.insts.push(Inst::Call { dst: None, callee: Callee::Syscall, args: vec![ex, code] });
     b.term = Term::Unreachable;
     m.funcs.push(f);
-    let elf = flashc::native::compile(m, flashc::native::Target::host().unwrap()).unwrap();
+    let elf = flashc::native::compile(m, target).unwrap();
     let (status, out) = run_elf(&elf, "hello");
     assert_eq!(status, 7);
     assert_eq!(out, "hi\n");
