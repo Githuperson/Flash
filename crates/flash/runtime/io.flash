@@ -69,7 +69,7 @@ fn fl_sleep_ms(ms: Int):
 fn fl_read_line() -> Int:
     out_flush()
     st = __state()
-    buf = st + 40960
+    buf = st + 45056
     cap = 256
     data = fl_alloc(cap)
     n = 0

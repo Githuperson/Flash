@@ -54,6 +54,8 @@ pub struct Allocation {
     pub saved_int: Vec<Reg>,
     pub saved_flt: Vec<Reg>,
     pub nslots: u32,
+    /// Per IR block: the trailing compare may be fused into the branch (its result is dead after it).
+    pub fuse_cmp: Vec<bool>,
 }
 
 pub fn is_noreturn_call(f: &Function, b: &Block) -> bool {
@@ -494,7 +496,14 @@ pub fn allocate(f: &Function) -> Allocation {
     }
     saved_int.sort();
     saved_flt.sort();
-    Allocation { order, loc, consts, uses, saved_int, saved_flt, nslots }
+    let mut fuse_cmp = vec![false; f.blocks.len()];
+    for (bi, b) in order.iter().enumerate() {
+        let blk = &f.blocks[*b];
+        if let (Some(Inst::Cmp { dst, .. }), Term::Br { cond, .. }) = (blk.insts.last(), &blk.term) {
+            fuse_cmp[*b] = dst == cond && consts[*dst as usize].is_none() && !live_out[bi].get(*dst as usize);
+        }
+    }
+    Allocation { order, loc, consts, uses, saved_int, saved_flt, nslots, fuse_cmp }
 }
 
 /// Constants are kept in their canonical in-register form: narrow integers zero-extended.

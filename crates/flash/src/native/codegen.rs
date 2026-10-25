@@ -14,6 +14,7 @@ use std::collections::HashMap;
 use crate::ir::*;
 
 use super::asm::*;
+use super::magic;
 use super::regalloc::*;
 
 pub const INT_ARG_REGS: [Reg; 6] = [RDI, RSI, RDX, RCX, R8, R9];
@@ -512,10 +513,8 @@ impl<'m> Cg<'m> {
         let n = blk.insts.len();
         // Fuse a trailing compare into the conditional branch that consumes it.
         let mut fused: Option<&Inst> = None;
-        if let (Some(last @ Inst::Cmp { dst, .. }), Term::Br { cond, .. }) = (blk.insts.last(), &blk.term) {
-            if dst == cond && st.al.uses[*dst as usize] == 1 && st.al.consts[*dst as usize].is_none() {
-                fused = Some(last);
-            }
+        if st.al.fuse_cmp[bi] {
+            fused = blk.insts.last();
         }
         let body = if fused.is_some() { n - 1 } else { n };
         for inst in &blk.insts[..body] {
@@ -899,6 +898,11 @@ impl<'m> Cg<'m> {
         let rem = matches!(op, BinOp::SRem | BinOp::URem);
         let oa = self.opd(st, a);
         let ob = self.opd(st, b);
+        if let Opd::I(dv) = ob {
+            if self.divrem_const(st, dst, signed, rem, oa, dv) {
+                return;
+            }
+        }
         // Divisor into a register that is neither rax nor rdx.
         let rb = match ob {
             Opd::R(r) => r,
@@ -946,6 +950,157 @@ impl<'m> Cg<'m> {
             self.norm(res, ty);
         }
         self.commit_int(st, dst, res);
+    }
+
+    /// Division or remainder by a constant without a divide instruction. Returns false if the
+    /// divisor is zero (the generic path then emits the hardware division).
+    fn divrem_const(&mut self, st: &FnState, dst: VReg, signed: bool, rem: bool, oa: Opd, dv: i64) -> bool {
+        let ty = st.f.vregs[dst as usize];
+        let d_s: i64 = match ty {
+            Ty::I8 => dv as u8 as i8 as i64,
+            Ty::I16 => dv as u16 as i16 as i64,
+            Ty::I32 => dv as u32 as i32 as i64,
+            _ => dv,
+        };
+        let d_u = dv as u64;
+        if (signed && d_s == 0) || (!signed && d_u == 0) {
+            return false;
+        }
+        // The dividend, sign-extended (signed) or zero-extended (unsigned) to 64 bits, in a register
+        // that is not rax or rdx.
+        let ra = if signed && ty != Ty::I64 {
+            self.load_opd(RCX, oa);
+            self.a.movsx(sz_of(ty), RCX, RCX);
+            RCX
+        } else {
+            match oa {
+                Opd::R(r) => r,
+                o => {
+                    self.load_opd(RCX, o);
+                    RCX
+                }
+            }
+        };
+        let res;
+        if signed {
+            let ad = d_s.unsigned_abs();
+            if d_s == 1 || d_s == -1 {
+                if rem {
+                    self.a.mov_ri(RAX, 0);
+                } else {
+                    self.a.mov_rr(Sz::Q, RAX, ra);
+                    if d_s == -1 {
+                        self.a.neg(Sz::Q, RAX);
+                    }
+                }
+                res = RAX;
+            } else if ad.is_power_of_two() {
+                let k = ad.trailing_zeros() as u8;
+                // t = a + (a < 0 ? 2^k - 1 : 0)
+                self.a.mov_rr(Sz::Q, RAX, ra);
+                self.a.shift_i(7, Sz::Q, RAX, 63);
+                self.a.shift_i(5, Sz::Q, RAX, 64 - k);
+                self.a.alu_rr(Alu::Add, Sz::Q, RAX, ra);
+                if rem {
+                    self.a.mov_ri(RDX, -(1i64 << k));
+                    self.a.alu_rr(Alu::And, Sz::Q, RAX, RDX);
+                    self.a.mov_rr(Sz::Q, RDX, ra);
+                    self.a.alu_rr(Alu::Sub, Sz::Q, RDX, RAX);
+                    res = RDX;
+                } else {
+                    self.a.shift_i(7, Sz::Q, RAX, k);
+                    if d_s < 0 {
+                        self.a.neg(Sz::Q, RAX);
+                    }
+                    res = RAX;
+                }
+            } else {
+                let (m, s) = magic::signed(d_s);
+                self.a.mov_ri(RAX, m);
+                self.a.mul_wide(ra, true);
+                if d_s > 0 && m < 0 {
+                    self.a.alu_rr(Alu::Add, Sz::Q, RDX, ra);
+                }
+                if d_s < 0 && m > 0 {
+                    self.a.alu_rr(Alu::Sub, Sz::Q, RDX, ra);
+                }
+                if s > 0 {
+                    self.a.shift_i(7, Sz::Q, RDX, s as u8);
+                }
+                self.a.mov_rr(Sz::Q, RAX, RDX);
+                self.a.shift_i(5, Sz::Q, RAX, 63);
+                self.a.alu_rr(Alu::Add, Sz::Q, RDX, RAX);
+                if rem {
+                    self.imul_const(RDX, d_s);
+                    self.a.mov_rr(Sz::Q, RAX, ra);
+                    self.a.alu_rr(Alu::Sub, Sz::Q, RAX, RDX);
+                    res = RAX;
+                } else {
+                    res = RDX;
+                }
+            }
+            if ty != Ty::I64 {
+                self.norm(res, ty);
+            }
+        } else if d_u == 1 {
+            if rem {
+                self.a.mov_ri(RAX, 0);
+            } else {
+                self.a.mov_rr(Sz::Q, RAX, ra);
+            }
+            res = RAX;
+        } else if d_u.is_power_of_two() {
+            self.a.mov_rr(Sz::Q, RAX, ra);
+            if rem {
+                if d_u - 1 <= i32::MAX as u64 {
+                    self.a.alu_ri(Alu::And, Sz::Q, RAX, (d_u - 1) as i32);
+                } else {
+                    self.a.mov_ri(RDX, (d_u - 1) as i64);
+                    self.a.alu_rr(Alu::And, Sz::Q, RAX, RDX);
+                }
+            } else {
+                self.a.shift_i(5, Sz::Q, RAX, d_u.trailing_zeros() as u8);
+            }
+            res = RAX;
+        } else {
+            let (m, add, s) = magic::unsigned(d_u);
+            self.a.mov_ri(RAX, m as i64);
+            self.a.mul_wide(ra, false);
+            if !add {
+                if s > 0 {
+                    self.a.shift_i(5, Sz::Q, RDX, s as u8);
+                }
+            } else {
+                self.a.mov_rr(Sz::Q, RAX, ra);
+                self.a.alu_rr(Alu::Sub, Sz::Q, RAX, RDX);
+                self.a.shift_i(5, Sz::Q, RAX, 1);
+                self.a.alu_rr(Alu::Add, Sz::Q, RAX, RDX);
+                if s > 1 {
+                    self.a.shift_i(5, Sz::Q, RAX, (s - 1) as u8);
+                }
+                self.a.mov_rr(Sz::Q, RDX, RAX);
+            }
+            if rem {
+                self.imul_const(RDX, d_u as i64);
+                self.a.mov_rr(Sz::Q, RAX, ra);
+                self.a.alu_rr(Alu::Sub, Sz::Q, RAX, RDX);
+                res = RAX;
+            } else {
+                res = RDX;
+            }
+        }
+        self.commit_int(st, dst, res);
+        true
+    }
+
+    /// r *= c (64-bit), using rax as a temporary for constants that do not fit an immediate.
+    fn imul_const(&mut self, r: Reg, c: i64) {
+        if i32::try_from(c).is_ok() {
+            self.a.imul_rri(Sz::Q, r, r, c as i32);
+        } else {
+            self.a.mov_ri(RAX, c);
+            self.a.imul_rr(Sz::Q, r, RAX);
+        }
     }
 
     fn shift(&mut self, st: &FnState, dst: VReg, op: BinOp, a: VReg, b: VReg) {

@@ -438,7 +438,7 @@ impl<'a, 'p> FnLower<'a, 'p> {
     /// Lowering of the runtime-library intrinsics (see `check_builtins.rs`).
     fn intrinsic(&mut self, name: &str, args: &[HExpr]) -> VReg {
         // (base register, displacement) for an address `args[0] + args[1]`.
-        let mut addr = |s: &mut Self| -> (VReg, i32) {
+        let addr = |s: &mut Self| -> (VReg, i32) {
             let base = s.expr(&args[0]);
             match args[1].kind {
                 HKind::Int(n) if i32::try_from(n).is_ok() => (base, n as i32),

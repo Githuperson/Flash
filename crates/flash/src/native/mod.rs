@@ -7,6 +7,7 @@
 
 mod asm;
 mod codegen;
+mod magic;
 mod elf;
 pub mod link;
 mod regalloc;

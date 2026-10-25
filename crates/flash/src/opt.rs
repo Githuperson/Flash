@@ -18,6 +18,11 @@ pub fn optimise(m: &mut Module, release: bool) {
             simplify(f);
         }
     }
+    for f in &mut m.funcs {
+        if rotate_loops(f) {
+            simplify(f);
+        }
+    }
     remove_unused_functions(m);
 }
 
@@ -25,6 +30,8 @@ fn simplify(f: &mut Function) {
     for _ in 0..8 {
         let mut changed = false;
         changed |= fold_constants(f);
+        changed |= local_copy_propagation(f);
+        changed |= fold_copies_into_defs(f);
         changed |= simplify_cfg(f);
         changed |= dead_code(f);
         if !changed {
@@ -727,4 +734,137 @@ pub fn remove_unused_functions(m: &mut Module) {
         }
         m.funcs.push(f);
     }
+}
+
+// ------------------------------------------------------ copies and loops
+fn uses_vreg(i: &Inst, v: VReg) -> bool {
+    let mut found = false;
+    let mut c = i.clone();
+    for_uses(&mut c, |u| found |= *u == v);
+    found
+}
+
+fn set_def(i: &mut Inst, nd: VReg) {
+    match i {
+        Inst::IConst { dst, .. }
+        | Inst::FConst { dst, .. }
+        | Inst::Copy { dst, .. }
+        | Inst::Bin { dst, .. }
+        | Inst::Cmp { dst, .. }
+        | Inst::Un { dst, .. }
+        | Inst::Cast { dst, .. }
+        | Inst::Load { dst, .. }
+        | Inst::DataAddr { dst, .. }
+        | Inst::StackAddr { dst, .. }
+        | Inst::Select { dst, .. } => *dst = nd,
+        Inst::Call { dst, .. } => *dst = Some(nd),
+        Inst::Store { .. } => {}
+    }
+}
+
+/// Within a basic block, replace uses of `d` by `s` after `d = s` while neither is reassigned.
+fn local_copy_propagation(f: &mut Function) -> bool {
+    let mut changed = false;
+    let vregs = &f.vregs;
+    for b in &mut f.blocks {
+        let mut map: HashMap<VReg, VReg> = HashMap::new();
+        for inst in &mut b.insts {
+            for_uses(inst, |u| {
+                if let Some(s) = map.get(u) {
+                    *u = *s;
+                    changed = true;
+                }
+            });
+            if let Some(d) = def_of(inst) {
+                map.retain(|k, v| *k != d && *v != d);
+            }
+            if let Inst::Copy { dst, src } = inst {
+                if dst != src && vregs[*dst as usize] == vregs[*src as usize] {
+                    map.insert(*dst, *src);
+                }
+            }
+        }
+        term_uses(&mut b.term, |u| {
+            if let Some(s) = map.get(u) {
+                *u = *s;
+                changed = true;
+            }
+        });
+    }
+    changed
+}
+
+/// `t = a op b; ...; d = t` with `t` used only by the copy: compute straight into `d`.
+fn fold_copies_into_defs(f: &mut Function) -> bool {
+    let nparams = f.params.len();
+    let mut defs = vec![0u32; f.vregs.len()];
+    let mut uses = vec![0u32; f.vregs.len()];
+    for b in &mut f.blocks {
+        for i in &mut b.insts {
+            if let Some(d) = def_of(i) {
+                defs[d as usize] += 1;
+            }
+            for_uses(i, |u| uses[*u as usize] += 1);
+        }
+        term_uses(&mut b.term, |u| uses[*u as usize] += 1);
+    }
+    let mut changed = false;
+    for bi in 0..f.blocks.len() {
+        let mut k = 0;
+        while k < f.blocks[bi].insts.len() {
+            let Inst::Copy { dst: d, src: s } = f.blocks[bi].insts[k] else {
+                k += 1;
+                continue;
+            };
+            if d != s && (s as usize) >= nparams && defs[s as usize] == 1 && uses[s as usize] == 1 && f.vregs[d as usize] == f.vregs[s as usize] {
+                let insts = &f.blocks[bi].insts;
+                if let Some(j) = (0..k).rev().find(|j| def_of(&insts[*j]) == Some(s)) {
+                    let clear = (j + 1..k).all(|m| !uses_vreg(&insts[m], d) && def_of(&insts[m]) != Some(d));
+                    if clear {
+                        set_def(&mut f.blocks[bi].insts[j], d);
+                        f.blocks[bi].insts.remove(k);
+                        defs[d as usize] = defs[d as usize].max(1);
+                        changed = true;
+                        continue;
+                    }
+                }
+            }
+            k += 1;
+        }
+    }
+    changed
+}
+
+/// Loop rotation by tail duplication: a jump to a small block that only tests a condition and
+/// branches is replaced by a copy of that test, so a loop runs with one conditional branch per
+/// iteration instead of a test at the top and an unconditional jump at the bottom.
+fn rotate_loops(f: &mut Function) -> bool {
+    let n = f.blocks.len();
+    let mut preds = vec![0u32; n];
+    for b in &f.blocks {
+        match &b.term {
+            Term::Jump(t) => preds[*t as usize] += 1,
+            Term::Br { then_, else_, .. } => {
+                preds[*then_ as usize] += 1;
+                preds[*else_ as usize] += 1;
+            }
+            _ => {}
+        }
+    }
+    let mut changed = false;
+    for bi in 0..n {
+        let Term::Jump(h) = f.blocks[bi].term else { continue };
+        let h = h as usize;
+        if h == bi || preds[h] < 2 {
+            continue;
+        }
+        let hb = &f.blocks[h];
+        if matches!(hb.term, Term::Br { .. }) && hb.insts.len() <= 3 && !hb.insts.iter().any(|i| matches!(i, Inst::Call { .. })) {
+            let (insts, term) = (hb.insts.clone(), hb.term.clone());
+            f.blocks[bi].insts.extend(insts);
+            f.blocks[bi].term = term;
+            changed = true;
+        }
+    }
+    changed
 }

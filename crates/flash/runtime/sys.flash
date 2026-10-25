@@ -14,9 +14,9 @@
 #    64  start time of the program (ns), 0 = not taken yet
 #   128  heads of the free lists, one per size class (8 bytes each, classes 1..74)
 #  1024  scratch area (2048 bytes) for number formatting and C paths
-#  3072  scratch area for big numbers (floats), 8192 bytes
-#  8192  output buffer (32768 bytes)
-# 40960  stdin buffer (16384 bytes)
+#  3072  scratch area for big numbers (floats), 16 numbers of 336 bytes
+# 12288  output buffer (32768 bytes)
+# 45056  stdin buffer (16384 bytes)
 # Strings are [len][cap][bytes]; cap == -1 marks static data. Lists are [len][cap][data pointer].
 
 extern fn flash_main()
@@ -86,7 +86,7 @@ fn out_flush():
     n = __peek(st, 16)
     if n > 0:
         __poke(st, 16, 0)
-        sys_write_all(1, st + 8192, n)
+        sys_write_all(1, st + 12288, n)
 
 fn out_bytes(p: Int, n: Int):
     st = __state()
@@ -97,7 +97,7 @@ fn out_bytes(p: Int, n: Int):
         if n > 32768:
             sys_write_all(1, p, n)
             return
-    mem_copy(st + 8192 + used, p, n)
+    mem_copy(st + 12288 + used, p, n)
     __poke(st, 16, used + n)
 
 # Writes a Flash String object / an integer to standard error.

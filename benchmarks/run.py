@@ -79,7 +79,7 @@ def main():
         row = {"name": b, "impl": {}}
         variants = []
         variants.append(("flash-dev", [args.flash, "build", str(HERE / f"{b}.flash"), "-o", str(OUT / f"{b}_flash_dev")], OUT / f"{b}_flash_dev"))
-        variants.append(("flash-release", [args.flash, "build", str(HERE / f"{b}.flash"), "--release", "--backend", "cranelift", "-o", str(OUT / f"{b}_flash_rel")], OUT / f"{b}_flash_rel"))
+        variants.append(("flash-release", [args.flash, "build", str(HERE / f"{b}.flash"), "--release", "--backend", "native", "-o", str(OUT / f"{b}_flash_rel")], OUT / f"{b}_flash_rel"))
         if shutil.which("clang") or os.environ.get("FLASH_CLANG"):
             variants.append(("flash-release-llvm", [args.flash, "build", str(HERE / f"{b}.flash"), "--release", "--backend", "llvm", "-o", str(OUT / f"{b}_flash_llvm")], OUT / f"{b}_flash_llvm"))
         if rustc:
@@ -148,8 +148,8 @@ def render_markdown(results, info):
             else:
                 cells.append(fmt_s(x["median_s"]) + ("" if x.get("correct") in (True, None) else " ✗WRONG"))
         out.append(f"| {r['name']} | " + " | ".join(cells) + " |")
-    out.append("\n## Flash release vs Rust and C++ (run time ratio; 1.00 = same, >1 means Flash is slower; cranelift = `flash-release`, llvm = `flash-release-llvm`)\n")
-    out.append("| benchmark | cranelift / rust | cranelift / c++ -O3 | llvm / rust | llvm / c++ -O3 |")
+    out.append("\n## Flash release vs Rust and C++ (run time ratio; 1.00 = same, >1 means Flash is slower; native = `flash-release`, llvm = `flash-release-llvm`)\n")
+    out.append("| benchmark | native / rust | native / c++ -O3 | llvm / rust | llvm / c++ -O3 |")
     out.append("|---|---|---|---|---|")
     for r in results:
         def ratio(mine, other):

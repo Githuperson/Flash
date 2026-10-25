@@ -474,6 +474,11 @@ impl Asm {
         self.op(p, w, &[0xF7], if signed { 7 } else { 6 }, Rm::R(r), false);
     }
 
+    /// One-operand multiply: rdx:rax = rax * r (signed `imul` or unsigned `mul`).
+    pub fn mul_wide(&mut self, r: Reg, signed: bool) {
+        self.op(0, true, &[0xF7], if signed { 5 } else { 4 }, Rm::R(r), false);
+    }
+
     pub fn setcc(&mut self, cc: Cc, r: Reg) {
         self.op(0, false, &[0x0F, 0x90 | cc as u8], 0, Rm::R(r), true);
     }
