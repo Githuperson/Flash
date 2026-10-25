@@ -57,7 +57,7 @@ jobs:
               [ -f "$exp" ] || continue
               case "$f" in *plugins_demo*) continue;; esac
               $flash build "$f" $mode -o prog.exe > /dev/null
-              ./prog.exe > out.txt
+              ./prog.exe > out.txt || true   # some programs end with an error on purpose; stdout is compared
               cmp out.txt "$exp" || { echo "FAILED: $f $mode"; exit 1; }
             done
           done
