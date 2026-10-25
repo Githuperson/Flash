@@ -18,11 +18,7 @@ fn emulator_available() -> bool {
 
 const TARGETS: [&str; 2] = ["aarch64-unknown-linux-gnu", "aarch64-apple-darwin"];
 
-/// Build `src` for AArch64 Linux and run it in the emulator; returns stdout.
-fn emulate(src: &Path, release: bool, tag: &str) -> String {
-    emulate_for(src, release, TARGETS[0], tag)
-}
-
+/// Build `src` for `target` and run it in the emulator; returns stdout.
 fn emulate_for(src: &Path, release: bool, target: &str, tag: &str) -> String {
     let exe = scratch_dir(tag).join("prog.a64");
     let mut args = vec!["build", src.to_str().unwrap(), "-o", exe.to_str().unwrap(), "--target", target];
