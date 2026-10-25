@@ -19,6 +19,11 @@ int main(int argc, char** argv) {
     struct rusage ru;
     wait4(pid, &status, 0, &ru);
     fflush(stdout);
-    fprintf(stderr, "\n%ld\n", ru.ru_maxrss);
+#ifdef __APPLE__
+    long maxrss_kib = ru.ru_maxrss / 1024; /* macOS reports bytes, Linux reports KiB */
+#else
+    long maxrss_kib = ru.ru_maxrss;
+#endif
+    fprintf(stderr, "\n%ld\n", maxrss_kib);
     return WIFEXITED(status) ? WEXITSTATUS(status) : 1;
 }

@@ -117,7 +117,9 @@ def main():
                 info["cpu"] = line.split(":", 1)[1].strip()
                 break
     except OSError:
-        pass
+        if sys.platform == "darwin":
+            r = subprocess.run(["sysctl", "-n", "machdep.cpu.brand_string"], capture_output=True, text=True)
+            info["cpu"] = r.stdout.strip() or info["cpu"]
     md = render_markdown(results, info)
     print(md)
     if args.markdown:
