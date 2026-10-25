@@ -81,6 +81,7 @@ pub const BUILTIN_NAMES: &[&str] = &[
     "__ffloor",
     "__fceil",
     "__syscall",
+    "__winapi",
     "__state",
     "__str",
     "__os",

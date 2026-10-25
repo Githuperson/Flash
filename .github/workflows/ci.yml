@@ -34,3 +34,49 @@ jobs:
         run: cargo test -p flash ${{ matrix.flags }}
       - name: Flash self-tests
         run: ./target/debug/flash test tests/flash
+
+  # Windows: the compiler builds and its output runs natively (the Cargo test suite itself has
+  # Unix assumptions and is not run here; the programs below are compared with their expected output).
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build
+        run: cargo build --release -p flash
+      - name: Unit tests
+        run: cargo test --release -p flash --lib
+      - name: Programs run natively on Windows
+        shell: bash
+        run: |
+          set -e
+          flash=./target/release/flash.exe
+          for mode in "" "--release"; do
+            for f in examples/*.flash tests/programs/*.flash; do
+              exp="${f%.flash}.expected"
+              [ -f "$exp" ] || continue
+              case "$f" in *plugins_demo*) continue;; esac
+              $flash build "$f" $mode -o prog.exe > /dev/null
+              ./prog.exe > out.txt
+              cmp out.txt "$exp" || { echo "FAILED: $f $mode"; exit 1; }
+            done
+          done
+          echo "all programs match"
+      - name: Arguments, environment, files, stdin, exit code
+        shell: bash
+        run: |
+          ./target/release/flash.exe build tests/native_io/io.flash -o io.exe > /dev/null
+          set +e
+          echo "input line" | ./io.exe a "b c" d > io_out.txt
+          code=$?
+          set -e
+          cat io_out.txt
+          test "$code" = 3
+          cmp io_out.txt tests/native_io/io.expected
+      - name: Benchmarks give the same answers as on Linux
+        shell: bash
+        run: |
+          for b in strings sieve mandelbrot; do
+            ./target/release/flash.exe build benchmarks/$b.flash --release -o bench.exe > /dev/null
+            ./bench.exe
+          done

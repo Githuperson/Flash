@@ -1104,6 +1104,7 @@ impl<'m> Cg<'m> {
                     self.a.neg(0, 0);
                     self.a.bind(ok);
                 }
+                super::Os::Windows => return Err("the native back end cannot target Windows on ARM yet".into()),
             }
             if let Some(d) = dst {
                 self.commit(st, d, 0);

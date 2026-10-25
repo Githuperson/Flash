@@ -50,6 +50,7 @@ fn hello_through_raw_syscalls() {
         (Os::Linux, Arch::X86_64) => (1, 231),
         (Os::Linux, Arch::Aarch64) => (64, 94),
         (Os::MacOs, _) => (4, 1),
+        (Os::Windows, _) => return, // no raw system calls on Windows (the runtime imports kernel32)
     };
     let mut m = Module::default();
     m.data.push(DataItem { name: "msg".into(), bytes: b"hi\n".to_vec(), align: 1, writable: false });

@@ -16,7 +16,7 @@ Flash is an ahead-of-time compiled language: `flash build` emits a native execut
 
 ## Next concrete steps (in order)
 
-1. Run the macOS x86-64 output on a real Mac (Intel or Rosetta) and fix what the kernel rejects; and the Linux AArch64 output on real hardware (so far only in an emulator); a dynamic x86-64 Mach-O (the static one is probably rejected by current macOS as well); then a peephole pass for AArch64.
+1. Run the macOS x86-64 output on a real Mac (Intel or Rosetta) and fix what the kernel rejects; and the Linux AArch64 output on real hardware (so far only in an emulator); a Windows ARM64 target; a dynamic x86-64 Mach-O (the static one is probably rejected by current macOS as well); then a peephole pass for AArch64.
 2. Inline struct layout (value types) to close the `nbody` gap; peel invariant bounds checks out of nested loops (`matmul`: loads of `b[k]` stay in the loop because LICM runs before loop rotation; hoisting them made register pressure worse in the huge inlined `multiply`, so it needs a smarter register allocator first).
 3. Maps, sets, tuples and enums (prerequisites for JSON and for self-hosting).
 4. Tail-recursion elimination and better register allocation across calls (`fib`); SIMD for numeric loops.

@@ -1,0 +1,13 @@
+3
+arg: a
+arg: b c
+arg: d
+True
+True
+12 hello
+world
+
+17
+False
+False
+got: input line

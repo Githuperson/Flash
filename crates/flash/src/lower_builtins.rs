@@ -495,7 +495,7 @@ impl<'a, 'p> FnLower<'a, 'p> {
                 self.emit(Inst::Un { dst: d, op, a });
                 d
             }
-            "__syscall" => {
+            "__syscall" | "__winapi" => {
                 let vs: Vec<VReg> = args.iter().map(|a| self.expr(a)).collect();
                 let d = self.vreg(Ty::I64);
                 self.emit(Inst::Call { dst: Some(d), callee: Callee::Syscall, args: vs });
@@ -508,8 +508,8 @@ impl<'a, 'p> FnLower<'a, 'p> {
                 self.emit(Inst::DataAddr { dst: d, data: id });
                 d
             }
-            "__os" => self.iconst(Ty::I64, self.lw.target_os & 1),
-            "__arch" => self.iconst(Ty::I64, self.lw.target_os >> 1),
+            "__os" => self.iconst(Ty::I64, self.lw.target_os & 3),
+            "__arch" => self.iconst(Ty::I64, self.lw.target_os >> 2),
             "__state" => {
                 let id = self.lw.state_data();
                 let d = self.vreg(Ty::I64);

@@ -84,6 +84,8 @@ impl<'a> Checker<'a> {
             "__ffloor" => ("__ffloor", &["f"], Type::Float),
             "__fceil" => ("__fceil", &["f"], Type::Float),
             "__syscall" => ("__syscall", &["i", "i", "i", "i", "i", "i", "i"], int.clone()),
+            // Windows: call import number `slot` of kernel32.dll (up to seven arguments).
+            "__winapi" => ("__winapi", &["i", "i", "i", "i", "i", "i", "i", "i"], int.clone()),
             "__state" => ("__state", &[], int.clone()),
             // The target operating system (0 = Linux, 1 = macOS), a compile-time constant.
             "__os" => ("__os", &[], int.clone()),

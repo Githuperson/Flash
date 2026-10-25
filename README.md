@@ -28,6 +28,7 @@ for i in 0..3:                  # 0, 1, 2   (the upper bound is excluded; use 0.
 
 > **Status: v0.2, a working prototype.** The compiler, runtime, formatter, test runner and local package manager work and are covered by automated tests — on **Linux x86-64**, which is the only platform this was built and run on.
 > The **macOS x86-64** target (`--target x86_64-apple-darwin`; also runs on Apple Silicon through Rosetta 2) is implemented, and the files it writes are checked with LLVM's Mach-O reader, but **it has never been run on a Mac**.
+> The native back end also writes **Windows x86-64** executables (`--target x86_64-pc-windows-msvc` → PE32+ console program that imports a few functions from `kernel32.dll`; no C runtime). They are run in an emulator that implements those kernel32 functions (`scripts/run_win.py`) and, in CI, natively on a GitHub Windows runner; **until that CI job has been seen to pass, treat Windows as untested on real Windows.**
 > The native back end also writes **AArch64** executables (`--target aarch64-unknown-linux-gnu` → static ELF, `--target aarch64-apple-darwin` → ad-hoc-signed, dynamic position-independent Mach-O for Apple Silicon, because current macOS kills static executables). The Linux one has been run only in a CPU emulator (Unicorn, `scripts/run_a64.py`), where the examples, float/math runtime tests and four benchmarks print exactly what the x86-64 builds print. The macOS one **runs on a GitHub-hosted Apple Silicon runner (macOS 26) in CI, and the whole test suite passes there**. Neither has been tried on real Linux ARM hardware or on a personal Mac. Performance: measured, not claimed (see [Performance](#performance)): Flash's own code generator is within 1.1–2.3× of Rust on six of the eight benchmarks,
 > faster on the two allocation-heavy ones, and slower than LLVM-compiled code on `fib` and `matmul`.
 
@@ -153,7 +154,7 @@ How to write, build (Linux, macOS, Windows) and load plugins, the ownership rule
 Flash runtime it uses (compiled from Flash source into the same file), a small constant pool. What it needs from the system: the Linux kernel (or macOS kernel) — it makes raw system calls and has no dynamic section
 (`ldd` reports "not a dynamic executable"). Executables are target specific: one file per OS and CPU; the macOS one has never been executed (see Status).
 
-Limits of this path, all reported as clear errors: no `extern fn` / `--link` / native plugins (they need a C ABI; use `--features legacy-backends`), Linux and macOS on x86-64 only, no Windows.
+Limits of this path, all reported as clear errors: no `extern fn` / `--link` / native plugins (they need a C ABI; use `--features legacy-backends`), targets: Linux x86-64/AArch64, macOS x86-64/arm64 and Windows x86-64 (Windows ARM is not supported).
 
 ## Static linking
 
