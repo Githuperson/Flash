@@ -685,7 +685,7 @@ fn build_native(
     let rt = crate::native::link::lower_runtime().map_err(|e| format!("internal error in the runtime library:\n{}", e))?;
     let t1 = std::time::Instant::now();
     let module = crate::native::link::link(user, rt, opts.release).map_err(|e| format!("{}\n", e))?;
-    let elf = crate::native::compile(&module).map_err(|e| format!("{}\n", e))?;
+    let elf = crate::native::compile(module).map_err(|e| format!("{}\n", e))?;
     let t2 = std::time::Instant::now();
     std::fs::write(out, &elf).map_err(|e| format!("cannot write {}: {}", out.display(), e))?;
     #[cfg(unix)]

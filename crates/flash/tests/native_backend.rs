@@ -45,7 +45,7 @@ fn hello_through_raw_syscalls() {
     b.insts.push(Inst::Call { dst: None, callee: Callee::Syscall, args: vec![ex, code] });
     b.term = Term::Unreachable;
     m.funcs.push(f);
-    let elf = flashc::native::compile(&m).unwrap();
+    let elf = flashc::native::compile(m).unwrap();
     let (status, out) = run_elf(&elf, "hello");
     assert_eq!(status, 7);
     assert_eq!(out, "hi\n");

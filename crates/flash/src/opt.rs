@@ -9,24 +9,49 @@ use std::collections::HashMap;
 use crate::ir::*;
 
 pub fn optimise(m: &mut Module, release: bool) {
+    let timing = std::env::var_os("FLASH_DEBUG_TIMES").is_some();
+    let t0 = std::time::Instant::now();
+    let lap = |what: &str, t: &mut std::time::Instant| {
+        if timing {
+            eprintln!("  opt: {:<12} {:?}", what, t.elapsed());
+        }
+        *t = std::time::Instant::now();
+    };
+    let mut t = t0;
     for f in &mut m.funcs {
         simplify(f);
     }
+    lap("simplify", &mut t);
     if release {
         inline_small_functions(m);
+        lap("inline", &mut t);
         for f in &mut m.funcs {
             simplify(f);
         }
+        lap("simplify", &mut t);
         let ntags = m.tags.len();
+        let (mut tg, mut tl, mut ts) = (std::time::Duration::ZERO, std::time::Duration::ZERO, std::time::Duration::ZERO);
         for f in &mut m.funcs {
+            let a = std::time::Instant::now();
             let mut c = crate::gvn::gvn(f, ntags);
-            if crate::licm::licm(f) {
+            tg += a.elapsed();
+            let a = std::time::Instant::now();
+            let hoisted = crate::licm::licm(f);
+            tl += a.elapsed();
+            if hoisted {
+                let a = std::time::Instant::now();
                 crate::gvn::gvn(f, ntags);
+                tg += a.elapsed();
                 c = true;
             }
             if c {
+                let a = std::time::Instant::now();
                 simplify(f);
+                ts += a.elapsed();
             }
+        }
+        if timing {
+            eprintln!("  opt: gvn {:?}, licm {:?}, simplify {:?}", tg, tl, ts);
         }
     }
     for f in &mut m.funcs {
@@ -64,11 +89,12 @@ fn def_of(i: &Inst) -> Option<VReg> {
         | Inst::Un { dst, .. }
         | Inst::Cast { dst, .. }
         | Inst::Load { dst, .. }
+        | Inst::LoadIdx { dst, .. }
         | Inst::DataAddr { dst, .. }
         | Inst::StackAddr { dst, .. }
         | Inst::Select { dst, .. } => Some(*dst),
         Inst::Call { dst, .. } => *dst,
-        Inst::Store { .. } => None,
+        Inst::Store { .. } | Inst::StoreIdx { .. } => None,
     }
 }
 
@@ -82,8 +108,17 @@ fn for_uses(i: &mut Inst, mut f: impl FnMut(&mut VReg)) {
             f(b);
         }
         Inst::Load { base, .. } => f(base),
+        Inst::LoadIdx { base, index, .. } => {
+            f(base);
+            f(index);
+        }
         Inst::Store { base, val, .. } => {
             f(base);
+            f(val);
+        }
+        Inst::StoreIdx { base, index, val, .. } => {
+            f(base);
+            f(index);
             f(val);
         }
         Inst::Call { callee, args, .. } => {
@@ -538,6 +573,11 @@ fn inst_count(f: &Function) -> usize {
     f.blocks.iter().map(|b| b.insts.len() + 1).sum()
 }
 
+/// System calls are slow paths; inlining the wrappers around them only bloats the callers.
+fn has_syscall(f: &Function) -> bool {
+    f.blocks.iter().any(|b| b.insts.iter().any(|i| matches!(i, Inst::Call { callee: Callee::Syscall, .. })))
+}
+
 fn calls_func(f: &Function, target: u32) -> bool {
     f.blocks.iter().any(|b| b.insts.iter().any(|i| matches!(i, Inst::Call { callee: Callee::Func(c), .. } if *c == target)))
 }
@@ -555,7 +595,7 @@ fn inline_small_functions(m: &mut Module) {
             .iter()
             .enumerate()
             .map(|(i, f)| {
-                let ok = !f.exported && !f.no_inline && inst_count(f) <= inline_limit() && !calls_func(f, i as u32);
+                let ok = !f.exported && !f.no_inline && inst_count(f) <= inline_limit() && !calls_func(f, i as u32) && !has_syscall(f);
                 ok.then(|| f.clone())
             })
             .collect();
@@ -589,6 +629,11 @@ fn inline_into(f: &mut Function, self_idx: u32, cands: &[Option<Function>]) -> b
     let mut budget = 200; // bound total growth
     'outer: loop {
         for bi in 0..f.blocks.len() {
+            // Never inline on a path that ends the program (panics, error reports): it only bloats
+            // the function and keeps registers busy on the cold path.
+            if matches!(f.blocks[bi].term, Term::Unreachable) {
+                continue;
+            }
             for ii in 0..f.blocks[bi].insts.len() {
                 let Inst::Call { dst, callee: Callee::Func(c), args } = f.blocks[bi].insts[ii].clone() else { continue };
                 if c == self_idx {
@@ -650,6 +695,7 @@ fn splice(f: &mut Function, bi: usize, ii: usize, dst: Option<VReg>, args: &[VRe
 
 fn remap_inst(i: &mut Inst, vbase: u32, sbase: u32) {
     match i {
+        Inst::LoadIdx { .. } | Inst::StoreIdx { .. } => unreachable!("indexed memory instructions are created after inlining"),
         Inst::IConst { dst, .. } | Inst::FConst { dst, .. } | Inst::DataAddr { dst, .. } => *dst += vbase,
         Inst::StackAddr { dst, slot } => {
             *dst += vbase;
@@ -767,11 +813,12 @@ fn set_def(i: &mut Inst, nd: VReg) {
         | Inst::Un { dst, .. }
         | Inst::Cast { dst, .. }
         | Inst::Load { dst, .. }
+        | Inst::LoadIdx { dst, .. }
         | Inst::DataAddr { dst, .. }
         | Inst::StackAddr { dst, .. }
         | Inst::Select { dst, .. } => *dst = nd,
         Inst::Call { dst, .. } => *dst = Some(nd),
-        Inst::Store { .. } => {}
+        Inst::Store { .. } | Inst::StoreIdx { .. } => {}
     }
 }
 

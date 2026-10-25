@@ -71,8 +71,17 @@ pub fn for_uses(i: &Inst, mut f: impl FnMut(VReg)) {
             f(*b);
         }
         Inst::Load { base, .. } => f(*base),
+        Inst::LoadIdx { base, index, .. } => {
+            f(*base);
+            f(*index);
+        }
         Inst::Store { base, val, .. } => {
             f(*base);
+            f(*val);
+        }
+        Inst::StoreIdx { base, index, val, .. } => {
+            f(*base);
+            f(*index);
             f(*val);
         }
         Inst::Call { callee, args, .. } => {
@@ -101,11 +110,12 @@ pub fn def_of(i: &Inst) -> Option<VReg> {
         | Inst::Un { dst, .. }
         | Inst::Cast { dst, .. }
         | Inst::Load { dst, .. }
+        | Inst::LoadIdx { dst, .. }
         | Inst::DataAddr { dst, .. }
         | Inst::StackAddr { dst, .. }
         | Inst::Select { dst, .. } => Some(*dst),
         Inst::Call { dst, .. } => *dst,
-        Inst::Store { .. } => None,
+        Inst::Store { .. } | Inst::StoreIdx { .. } => None,
     }
 }
 

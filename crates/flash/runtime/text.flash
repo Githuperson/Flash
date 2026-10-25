@@ -120,21 +120,25 @@ fn fl_list_new(cap: Int, stride: Int) -> Int:
 
 fn fl_list_push_slot(l: Int, stride: Int) -> Int:
     n = __peek(l, 0)
+    if n == __peek(l, 8):
+        list_grow(l, stride)
+    __poke(l, 0, n + 1)
+    return __peek(l, 16) + n * stride
+
+# Doubles the capacity of a full list (4 elements for an empty one).
+fn list_grow(l: Int, stride: Int):
+    n = __peek(l, 0)
     cap = __peek(l, 8)
     data = __peek(l, 16)
-    if n == cap:
-        new_cap = 4
-        if cap != 0:
-            new_cap = cap * 2
-        fresh = fl_alloc(new_cap * stride)
-        if data != 0:
-            mem_copy(fresh, data, n * stride)
-            fl_free(data, cap * stride)
-        data = fresh
-        __poke(l, 16, data)
-        __poke(l, 8, new_cap)
-    __poke(l, 0, n + 1)
-    return data + n * stride
+    new_cap = 4
+    if cap != 0:
+        new_cap = cap * 2
+    fresh = fl_alloc(new_cap * stride)
+    if data != 0:
+        mem_copy(fresh, data, n * stride)
+        fl_free(data, cap * stride)
+    __poke(l, 16, fresh)
+    __poke(l, 8, new_cap)
 
 fn fl_list_pop_slot(l: Int, stride: Int) -> Int:
     n = __peek(l, 0)

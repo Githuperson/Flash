@@ -165,11 +165,12 @@ fn def_of(i: &Inst) -> Option<VReg> {
         | Inst::Un { dst, .. }
         | Inst::Cast { dst, .. }
         | Inst::Load { dst, .. }
+        | Inst::LoadIdx { dst, .. }
         | Inst::DataAddr { dst, .. }
         | Inst::StackAddr { dst, .. }
         | Inst::Select { dst, .. } => Some(*dst),
         Inst::Call { dst, .. } => *dst,
-        Inst::Store { .. } => None,
+        Inst::Store { .. } | Inst::StoreIdx { .. } => None,
     }
 }
 
@@ -362,6 +363,7 @@ fn process_block(f: &mut Function, vregs: &[Ty], st: &mut State, b: usize) -> bo
                 st.set_expr(key, vv);
                 st.set_rep(vv, *val);
             }
+            Inst::LoadIdx { .. } | Inst::StoreIdx { .. } => unreachable!("indexed memory instructions are created after GVN"),
             Inst::Call { dst, .. } => {
                 st.clobber_all();
                 if let Some(d) = dst {

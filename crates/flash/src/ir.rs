@@ -170,6 +170,25 @@ pub enum Inst {
         callee: Callee,
         args: Vec<VReg>,
     },
+    /// `dst = *(base + (index << scale) + off)`. Produced only by the native back end's last
+    /// pass (address folding); the machine-independent optimiser never sees it.
+    LoadIdx {
+        dst: VReg,
+        base: VReg,
+        index: VReg,
+        scale: u8,
+        off: i32,
+        tag: MemTag,
+    },
+    /// `*(base + (index << scale) + off) = val` (see `LoadIdx`).
+    StoreIdx {
+        base: VReg,
+        index: VReg,
+        scale: u8,
+        off: i32,
+        val: VReg,
+        tag: MemTag,
+    },
     /// Address of read-only/static data.
     DataAddr {
         dst: VReg,

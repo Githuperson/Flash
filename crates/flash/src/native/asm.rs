@@ -35,15 +35,17 @@ pub enum Sz {
 #[derive(Clone, Copy, Debug)]
 pub struct Mem {
     pub base: Option<Reg>,
+    /// Optional scaled index: (register, log2 of the scale 0..=3). The index must not be rsp.
+    pub index: Option<(Reg, u8)>,
     pub disp: i32,
 }
 
 impl Mem {
     pub fn at(base: Reg, disp: i32) -> Mem {
-        Mem { base: Some(base), disp }
+        Mem { base: Some(base), index: None, disp }
     }
     pub fn abs(addr: u32) -> Mem {
-        Mem { base: None, disp: addr as i32 }
+        Mem { base: None, index: None, disp: addr as i32 }
     }
 }
 
@@ -180,6 +182,11 @@ impl Asm {
         if rm_needs_ext {
             rex |= 1;
         }
+        if let Rm::M(Mem { index: Some((ix, _)), .. }) = rm {
+            if ix >= 8 {
+                rex |= 2;
+            }
+        }
         // A REX prefix is always harmless and is required to address sil/dil/spl/bpl.
         if rex != 0x40 || byte_regs {
             self.b(rex);
@@ -204,9 +211,17 @@ impl Asm {
                     } else {
                         (2u8, false)
                     };
-                    self.b((mode << 6) | (reg3 << 3) | if b3 == 4 { 4 } else { b3 });
-                    if b3 == 4 {
-                        self.b(0x24); // SIB: base=rsp/r12, no index
+                    let needs_sib = b3 == 4 || m.index.is_some();
+                    self.b((mode << 6) | (reg3 << 3) | if needs_sib { 4 } else { b3 });
+                    if needs_sib {
+                        let (idx, scale) = match m.index {
+                            Some((ix, sc)) => {
+                                debug_assert!(ix != RSP);
+                                (ix & 7, sc)
+                            }
+                            None => (4, 0), // no index
+                        };
+                        self.b((scale << 6) | (idx << 3) | b3);
                     }
                     if mode == 1 {
                         debug_assert!(disp8);

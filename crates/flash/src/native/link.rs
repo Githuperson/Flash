@@ -92,6 +92,8 @@ pub fn link(mut user: Module, mut rt: Module, release: bool) -> Result<Module, S
         f.exported = false;
     }
     user.funcs[entry as usize].exported = true;
+    // Drop everything the program cannot reach before spending time optimising it.
+    crate::opt::remove_unused_functions(&mut user);
     crate::opt::optimise(&mut user, release && std::env::var_os("FLASH_DEBUG_NOINLINE").is_none());
     if let Some(name) = std::env::var_os("FLASH_DEBUG_DUMP") {
         for f in user.funcs.iter().filter(|f| f.name == name.to_string_lossy()) {

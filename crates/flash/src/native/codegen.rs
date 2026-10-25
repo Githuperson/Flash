@@ -791,6 +791,45 @@ impl<'m> Cg<'m> {
                     }
                 }
             }
+            Inst::LoadIdx { dst, base, index, scale, off, .. } => {
+                let ob = self.opd(st, *base);
+                let rb = self.in_reg(ob, RAX);
+                let oi = self.opd(st, *index);
+                let ri = self.in_reg(oi, RCX);
+                let m = Mem { base: Some(rb), index: Some((ri, *scale)), disp: *off };
+                let t = st.f.vregs[*dst as usize];
+                if t.is_float() {
+                    let x = self.dst_flt(st, *dst);
+                    self.a.movsd_load(x, m);
+                    self.commit_flt(st, *dst, x);
+                } else {
+                    let rd = self.dst_int(st, *dst);
+                    self.a.load(sz_of(t), rd, m);
+                    self.commit_int(st, *dst, rd);
+                }
+            }
+            Inst::StoreIdx { base, index, scale, off, val, .. } => {
+                let ob = self.opd(st, *base);
+                let rb = self.in_reg(ob, RAX);
+                let oi = self.opd(st, *index);
+                let ri = self.in_reg(oi, RDX);
+                let m = Mem { base: Some(rb), index: Some((ri, *scale)), disp: *off };
+                let t = st.f.vregs[*val as usize];
+                if t.is_float() {
+                    let o = self.fopd(st, *val);
+                    let x = self.f_in_reg(o, XT0);
+                    self.a.movsd_store(m, x);
+                } else {
+                    let sz = sz_of(t);
+                    match self.opd(st, *val) {
+                        Opd::I(i) if i32::try_from(i).is_ok() || sz != Sz::Q => self.a.store_imm(sz, m, i as i32),
+                        o => {
+                            let r = self.in_reg(o, RCX);
+                            self.a.store(sz, m, r);
+                        }
+                    }
+                }
+            }
             Inst::Call { dst, callee, args } => self.call(st, *dst, callee, args)?,
             Inst::DataAddr { dst, data } => {
                 let rd = self.dst_int(st, *dst);

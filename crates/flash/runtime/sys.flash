@@ -162,7 +162,23 @@ fn out_of_memory():
     err_str(__str("Flash runtime error: out of memory\n"))
     sys_exit(101)
 
+# The common case (a small block with a non-empty free list) is a few instructions that the
+# compiler inlines at every call site; everything else is in the out-of-line slow paths.
 fn fl_alloc(size: Int) -> Int:
+    st = __state()
+    if size <= 1024:
+        c = 1
+        if size > 16:
+            c = (size + 15) >> 4
+        head = st + 128 + c * 8
+        p = __peek(head, 0)
+        if p != 0:
+            __poke(head, 0, __peek(p, 0))
+            __poke(st, 24, __peek(st, 24) + 1)
+            return p
+    return alloc_slow(size)
+
+fn alloc_slow(size: Int) -> Int:
     st = __state()
     __poke(st, 24, __peek(st, 24) + 1)
     c = size_class(size)
@@ -190,6 +206,19 @@ fn fl_alloc(size: Int) -> Int:
 fn fl_free(p: Int, size: Int):
     if p == 0:
         return
+    st = __state()
+    if size <= 1024:
+        c = 1
+        if size > 16:
+            c = (size + 15) >> 4
+        head = st + 128 + c * 8
+        __poke(p, 0, __peek(head, 0))
+        __poke(head, 0, p)
+        __poke(st, 24, __peek(st, 24) - 1)
+        return
+    free_slow(p, size)
+
+fn free_slow(p: Int, size: Int):
     st = __state()
     __poke(st, 24, __peek(st, 24) - 1)
     c = size_class(size)

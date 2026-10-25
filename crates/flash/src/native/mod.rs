@@ -5,6 +5,7 @@
 //! Flash (see `runtime/*.flash`), compiled by the same pipeline, and talks to the Linux kernel
 //! through raw system calls.
 
+mod addrfold;
 mod asm;
 mod codegen;
 mod magic;
@@ -22,7 +23,11 @@ fn align(x: u64, a: u64) -> u64 {
 }
 
 /// Compile a fully linked module (no unresolved externs) into an ELF executable image.
-pub fn compile(m: &Module) -> Result<Vec<u8>, String> {
+pub fn compile(mut m: Module) -> Result<Vec<u8>, String> {
+    for f in &mut m.funcs {
+        addrfold::run(f);
+    }
+    let m = &m;
     let entry_idx =
         m.funcs.iter().position(|f| f.name == ENTRY_FN).ok_or_else(|| format!("internal error: the runtime has no `{}` function", ENTRY_FN))?;
     let mut cg = codegen::Cg::new(m);
