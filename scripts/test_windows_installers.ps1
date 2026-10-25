@@ -1,9 +1,8 @@
-# Tests both Windows installers on a Windows machine (run from the repository root, after
-# scripts/package.sh and scripts/build_windows_installer.ps1). Uses Windows PowerShell 5.1 on
+# Tests install.ps1 and uninstall.ps1 on a Windows machine (run from the repository root, after
+# scripts/package.sh windows-x86_64). Uses Windows PowerShell 5.1 on
 # purpose: that is what most users have. Changes only the current user's PATH, and restores it.
 $ErrorActionPreference = 'Stop'
 $zip = (Resolve-Path 'dist\flash-windows-x86_64.zip').Path
-$setup = (Resolve-Path 'dist\flash-setup-windows-x86_64.exe').Path
 $savedPath = [Environment]::GetEnvironmentVariable('Path', 'User')
 
 function Path-Has($dir) { (([Environment]::GetEnvironmentVariable('Path', 'User')) -split ';') -contains $dir }
@@ -33,20 +32,7 @@ try {
     Check (-not (Path-Has "$home1\bin")) 'uninstall.ps1 removed the PATH entry'
     Remove-Item Env:FLASH_HOME
 
-    # ---- 2. setup wizard, silent
-    $dir2 = Join-Path $env:TEMP 'flash-setup-test'
-    if (Test-Path $dir2) { Remove-Item $dir2 -Recurse -Force }
-    $p = Start-Process -FilePath $setup -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/DIR=$dir2", '/TASKS=addtopath' -Wait -PassThru
-    Check ($p.ExitCode -eq 0) "setup exited with code $($p.ExitCode)"
-    Check (Test-Path "$dir2\bin\flash.exe") 'setup installed flash.exe'
-    Check (Path-Has "$dir2\bin") 'setup added bin to the user PATH'
-    Run-Hello "$dir2\bin\flash.exe" $env:TEMP
-    $p = Start-Process -FilePath "$dir2\unins000.exe" -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -Wait -PassThru
-    Check ($p.ExitCode -eq 0) 'uninstaller exited with code 0'
-    Start-Sleep -Seconds 2
-    Check (-not (Test-Path "$dir2\bin\flash.exe")) 'uninstaller removed flash.exe'
-    Check (-not (Path-Has "$dir2\bin")) 'uninstaller removed the PATH entry'
-    Write-Host 'Both Windows installers work.'
+    Write-Host 'The Windows installer (install.ps1 / uninstall.ps1) works.'
 } finally {
     [Environment]::SetEnvironmentVariable('Path', $savedPath, 'User')
 }

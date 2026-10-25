@@ -44,12 +44,10 @@ jobs:
           ./bin/flash$exe build hello.flash --release -o hello$exe
           ./hello$exe | tee out.txt
           test "$(cat out.txt)" = "Hello from the release archive"
-      - name: Windows setup wizard and installer tests
+      - name: Windows installer test
         if: startsWith(matrix.target, 'windows-')
         shell: powershell
-        run: |
-          .\scripts\build_windows_installer.ps1
-          .\scripts\test_windows_installers.ps1
+        run: .\scripts\test_windows_installers.ps1
       - uses: actions/upload-artifact@v4
         with: { name: "${{ matrix.target }}", path: dist/* }
   publish:
