@@ -12,11 +12,11 @@ Flash is an ahead-of-time compiled language: `flash build` emits a native execut
 | 5. Standard library | **partial** | Runtime and library written in Flash: strings, math, lists, files, paths, env, stdin, time. Missing: maps, sets, JSON, networking, random, crypto |
 | 6. Production foundations: generics, concurrency, packages | **partial** | local packages + lockfile done; generics, traits, closures, threads, `unsafe` not started |
 | 7. Self-hosting | **todo** | The compiler is written in Rust; the *runtime* is now written in Flash (a first step: the Flash compiler already compiles ~2,500 lines of systems code). Needs maps, generics, enums/sum types and richer strings before the compiler itself can move |
-| 8. Ecosystem: targets, plugins, LSP | **partial** | macOS x86-64 target written (untested on hardware); plugins and `extern fn` only via the legacy back ends; AArch64 native back end (Linux ELF, macOS arm64 Mach-O) written and checked in an emulator only; no LSP |
+| 8. Ecosystem: targets, plugins, LSP | **partial** | macOS x86-64 target written (untested on hardware); plugins and `extern fn` only via the legacy back ends; AArch64 native back end (Linux ELF, macOS arm64 Mach-O) Linux ELF checked in an emulator, macOS arm64 Mach-O runs on a CI Apple Silicon runner; no LSP |
 
 ## Next concrete steps (in order)
 
-1. Run the macOS x86-64 output on a real Mac (Intel or Rosetta) and fix what the kernel rejects; and the macOS arm64 and Linux AArch64 outputs on real hardware (so far they ran only in an emulator); then magic-number division and a peephole pass for AArch64.
+1. Run the macOS x86-64 output on a real Mac (Intel or Rosetta) and fix what the kernel rejects; and the Linux AArch64 output on real hardware (so far only in an emulator); a dynamic x86-64 Mach-O (the static one is probably rejected by current macOS as well); then magic-number division and a peephole pass for AArch64.
 2. Inline struct layout (value types) to close the `nbody` gap; peel invariant bounds checks out of nested loops (`matmul`).
 3. Maps, sets, tuples and enums (prerequisites for JSON and for self-hosting).
 4. Tail-recursion elimination and better register allocation across calls (`fib`); SIMD for numeric loops.
