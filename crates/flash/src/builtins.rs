@@ -84,6 +84,7 @@ pub const BUILTIN_NAMES: &[&str] = &[
     "__state",
     "__str",
     "__os",
+    "__arch",
 ];
 
 pub fn is_builtin(name: &str) -> bool {

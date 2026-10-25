@@ -87,6 +87,7 @@ impl<'a> Checker<'a> {
             "__state" => ("__state", &[], int.clone()),
             // The target operating system (0 = Linux, 1 = macOS), a compile-time constant.
             "__os" => ("__os", &[], int.clone()),
+            "__arch" => ("__arch", &[], int.clone()),
             // Address of a static String object for a string literal.
             "__str" => ("__str", &["s"], int.clone()),
             _ => return self.fail(Diagnostic::error(span, format!("Unknown runtime intrinsic '{}'.", name))),

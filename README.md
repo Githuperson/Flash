@@ -28,7 +28,7 @@ for i in 0..3:                  # 0, 1, 2   (the upper bound is excluded; use 0.
 
 > **Status: v0.2, a working prototype.** The compiler, runtime, formatter, test runner and local package manager work and are covered by automated tests — on **Linux x86-64**, which is the only platform this was built and run on.
 > The **macOS x86-64** target (`--target x86_64-apple-darwin`; also runs on Apple Silicon through Rosetta 2) is implemented, and the files it writes are checked with LLVM's Mach-O reader, but **it has never been run on a Mac**.
-> macOS ARM64 / Linux AArch64 are not supported by the native back end yet. Performance: measured, not claimed (see [Performance](#performance)): Flash's own code generator is within 1.1–2.3× of Rust on six of the eight benchmarks,
+> The native back end also writes **AArch64** executables (`--target aarch64-unknown-linux-gnu` → static ELF, `--target aarch64-apple-darwin` → ad-hoc-signed static Mach-O for Apple Silicon). They have been run only in a CPU emulator (Unicorn, driven by `scripts/run_a64.py`): the examples, float/math runtime tests and four benchmarks print exactly what the x86-64 builds print. **They have never run on real ARM hardware or a real Mac.** Performance: measured, not claimed (see [Performance](#performance)): Flash's own code generator is within 1.1–2.3× of Rust on six of the eight benchmarks,
 > faster on the two allocation-heavy ones, and slower than LLVM-compiled code on `fib` and `matmul`.
 
 ## What works
@@ -200,7 +200,7 @@ flash test tests/flash            # Flash-language tests of the standard library
 What is covered (`crates/flash/tests/`): lexer and parser (indentation errors, recovery, precedence), name resolution and scoping, type inference and 40+ error messages (`tests/errors/`), ownership rules and the allocation counter
 (every program in `tests/programs/` must finish with 0 live allocations, in dev and release builds, and with the legacy back ends when compiled in), arithmetic/control flow/functions/structs/strings/lists/files, optimiser behaviour (constant folding, DCE, inlining, bounds-check elimination),
 CLI exit codes and runtime-error exit code 101, formatter idempotence and behaviour preservation, `flash test`, the Mach-O output structure (checked with LLVM's reader), cross-target object formats of the legacy back ends (Mach-O arm64, ELF aarch64, COFF x86-64), the Flash runtime's float printing/parsing and math functions against Rust's standard library on thousands of random inputs, package manager (locking, tamper detection, native requirements),
-and plugins: real calls into the Rust and C++ plugins plus nine ABI-validation failure modes. **Not tested:** anything on real macOS, Windows or AArch64 hardware; concurrency (there is none).
+and plugins: real calls into the Rust and C++ plugins plus nine ABI-validation failure modes. AArch64 (Linux and macOS) output in an emulator against the x86-64 results (`tests/native_aarch64.rs`, needs python3 + `unicorn`). **Not tested:** anything on real macOS, Windows or AArch64 hardware; concurrency (there is none).
 
 ## Performance
 

@@ -170,7 +170,7 @@ impl<'m> Cg<'m> {
     pub fn emit_function(&mut self, f: &Function) -> Result<(usize, usize), String> {
         self.a.align_to(16, 0xCC);
         let start = self.a.pos();
-        let al = allocate(f);
+        let al = allocate(f, &X86_64);
         let labels: Vec<Label> = f.blocks.iter().map(|_| self.a.new_label()).collect();
 
         // Frame layout.

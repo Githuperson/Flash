@@ -22,7 +22,7 @@ pub fn runtime_source() -> String {
 /// Compile the runtime library to IR.
 pub fn lower_runtime(target: super::Target) -> Result<Module, String> {
     let fe = crate::driver::frontend_runtime("<flash runtime>", &runtime_source())?;
-    Ok(crate::lower::lower_runtime(&fe.program, target.os as i64))
+    Ok(crate::lower::lower_runtime(&fe.program, target.os as i64 | (target.arch as i64) << 1))
 }
 
 fn shift_function(f: &mut Function, fbase: u32, dbase: u32) {

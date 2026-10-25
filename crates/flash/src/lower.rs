@@ -49,7 +49,7 @@ pub struct Lowerer<'p> {
     tags: HashMap<String, MemTag>,
     /// Name functions exactly as written (the runtime library, whose `fl_*` functions are looked up by name).
     keep_names: bool,
-    /// Value of the runtime's `__os()` constant: 0 = Linux, 1 = macOS.
+    /// `os | arch << 1`: the runtime's `__os()` (0 = Linux, 1 = macOS) and `__arch()` (0 = x86-64, 1 = AArch64).
     pub target_os: i64,
 }
 

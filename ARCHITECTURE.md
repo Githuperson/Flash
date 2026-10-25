@@ -136,9 +136,10 @@ Dev builds run the cleanup passes only. The native back end's last IR pass, **ad
 * **Instruction selection** (`native/codegen.rs`): two-address forms with the destination coalesced where possible, comparison-and-branch fusion, `lea` for additions, constant divisors by multiplication with a magic number
   (`magic.rs`, checked against hardware division by a unit test) or shifts, saturating float→integer conversions, `floor`/`ceil` without SSE4.1, narrow integers kept zero-extended in registers.
 * **Calling convention** (Flash's own, System-V-like): integer arguments in `rdi rsi rdx rcx r8 r9`, floats in `xmm0–7`, the rest on the stack; results in `rax`/`xmm0`; `rbx rbp r12–r15` and `xmm8–13` are callee-saved. Nothing outside the program calls into it, so no foreign ABI is involved.
-* **Files**: a static ELF (`elf.rs`: three `PT_LOAD` segments, non-executable stack, a symbol table for debuggers) for Linux, a static Mach-O (`macho.rs`: `__PAGEZERO`, `__TEXT`, `__DATA`, `LC_UNIXTHREAD`) for macOS x86-64.
+* **Files**: a static ELF (`elf.rs`: three `PT_LOAD` segments, non-executable stack, a symbol table for debuggers) for Linux, a static Mach-O (`macho.rs`: `__PAGEZERO`, `__TEXT`, `__DATA`, `LC_UNIXTHREAD`) for macOS x86-64; for AArch64 the same writers produce ELF (`EM_AARCH64`, 16 KiB pages) and a Mach-O with a 4 GiB `__PAGEZERO`, `LC_BUILD_VERSION` and an ad-hoc code signature (`codesign.rs`: SHA-256 page hashes in a CodeDirectory, which Apple Silicon requires for every executable).
+* **AArch64 back end** (`native/a64.rs` encoder, `a64gen.rs` instruction selection, shared register allocator with a per-architecture `RegConfig`): arguments in `x0–x7`/`d0–d7` (outside the allocation pool), `x9–x15`/`d16–d29` caller-saved, `x19–x28`/`d8–d15` callee-saved; data addresses by `adrp`+`add`; the runtime's platform layer (`__arch()`) picks Linux-aarch64 or BSD system-call numbers (`svc #0`, or `svc #0x80` with the number in `x16` and the carry flag as error indicator on macOS).
 * **System calls**: Linux uses the `syscall` instruction directly; for macOS the code generator adds the BSD class bits and converts the carry-flag error convention to `-errno`.
-* **Not supported by this back end**: `extern fn`/`--link`, native plugins (both need a C ABI and dynamic loading — use the legacy back ends), Windows, 32-bit and (so far) AArch64.
+* **Not supported by this back end**: `extern fn`/`--link`, native plugins (both need a C ABI and dynamic loading — use the legacy back ends), Windows and 32-bit. Not yet done on AArch64: division by multiplication with a magic number (a plain `sdiv`/`udiv` is used).
 
 Measured behaviour: see `benchmarks/RESULTS.md`. Compile time is a few milliseconds of code generation plus the front end (the whole `flash build` of a small program takes 10–30 ms).
 
@@ -187,7 +188,7 @@ The legacy runtime (`crates/flash-rt`, a Rust static library, with the plugin lo
 |---|---|
 | Linux x86-64 | **built, tested, benchmarked** with the native back end (all tests run here), and with the legacy back ends |
 | macOS x86-64 (Intel, and Apple Silicon through Rosetta 2) | the native back end writes a static Mach-O (`--target x86_64-apple-darwin`); its structure is checked with LLVM's Mach-O reader, **it has never been executed on a Mac** |
-| macOS ARM64, Linux AArch64 | not supported by the native back end yet; the legacy Cranelift back end produces objects linked with `cc` (untested) |
+| macOS ARM64, Linux AArch64 | the native back end writes static executables (ELF / signed Mach-O); **run only in a CPU emulator** (Unicorn) where examples, runtime float/math tests and benchmarks match the x86-64 output; never run on real hardware |
 | Windows | not supported (the legacy plugin loader and library naming are written but untested) |
 
 ## 9. Known limitations / roadmap

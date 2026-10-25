@@ -1,12 +1,20 @@
 //! Minimal static ELF64 executable writer (Linux x86-64, no dynamic linking, no libc).
 
+/// x86-64 Linux: executable image base and segment alignment.
 pub const BASE: u64 = 0x40_0000;
-const PAGE: u64 = 0x1000;
+pub const PAGE: u64 = 0x1000;
 
 pub struct Symbol {
     pub name: String,
     pub addr: u64,
     pub size: u64,
+}
+
+/// Which instruction set the file is for.
+#[derive(Clone, Copy)]
+pub enum Machine {
+    X86_64 = 62,
+    Aarch64 = 183,
 }
 
 pub struct Image<'a> {
@@ -20,6 +28,8 @@ pub struct Image<'a> {
 
 /// Virtual addresses of the segments for given section sizes.
 pub struct Layout {
+    pub base: u64,
+    pub page: u64,
     pub text: u64,
     pub rodata: u64,
     pub data: u64,
@@ -30,12 +40,13 @@ fn align(x: u64, a: u64) -> u64 {
     x.div_ceil(a) * a
 }
 
-pub fn layout(text_len: u64, rodata_len: u64, data_len: u64) -> Layout {
-    // File offset == virtual address - BASE for every loaded segment.
-    let text = BASE + PAGE;
-    let rodata = BASE + align(text - BASE + text_len, PAGE);
-    let data = BASE + align(rodata - BASE + rodata_len, PAGE);
-    Layout { text, rodata, data, bss: data + align(data_len, 16) }
+/// Segments are page aligned; the first page holds the file headers. File offset == virtual
+/// address - `base` for every loaded segment.
+pub fn layout(base: u64, page: u64, text_len: u64, rodata_len: u64, data_len: u64) -> Layout {
+    let text = base + page;
+    let rodata = base + align(text - base + text_len, page);
+    let data = base + align(rodata - base + rodata_len, page);
+    Layout { base, page, text, rodata, data, bss: data + align(data_len, 16) }
 }
 
 fn put16(v: &mut Vec<u8>, x: u16) {
@@ -73,17 +84,17 @@ fn shdr(v: &mut Vec<u8>, name: u32, kind: u32, flags: u64, addr: u64, off: u64, 
     put64(v, entsize);
 }
 
-pub fn write(img: &Image) -> Vec<u8> {
-    let l = layout(img.text.len() as u64, img.rodata.len() as u64, img.data.len() as u64);
-    let text_off = l.text - BASE;
-    let ro_off = l.rodata - BASE;
-    let data_off = l.data - BASE;
+pub fn write(img: &Image, l: &Layout, machine: Machine) -> Vec<u8> {
+    let page = l.page;
+    let text_off = l.text - l.base;
+    let ro_off = l.rodata - l.base;
+    let data_off = l.data - l.base;
     let mut out: Vec<u8> = vec![];
 
     // ELF header.
     out.extend_from_slice(&[0x7F, b'E', b'L', b'F', 2, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
     put16(&mut out, 2); // ET_EXEC
-    put16(&mut out, 62); // EM_X86_64
+    put16(&mut out, machine as u16);
     put32(&mut out, 1);
     put64(&mut out, img.entry);
     put64(&mut out, 64); // phoff
@@ -99,9 +110,9 @@ pub fn write(img: &Image) -> Vec<u8> {
 
     let data_filesz = img.data.len() as u64;
     // PF_X=1, PF_W=2, PF_R=4
-    phdr(&mut out, 1, 5, text_off, l.text, img.text.len() as u64, img.text.len() as u64, PAGE);
-    phdr(&mut out, 1, 4, ro_off, l.rodata, img.rodata.len() as u64, img.rodata.len() as u64, PAGE);
-    phdr(&mut out, 1, 6, data_off, l.data, data_filesz, (l.bss - l.data) + img.bss, PAGE);
+    phdr(&mut out, 1, 5, text_off, l.text, img.text.len() as u64, img.text.len() as u64, page);
+    phdr(&mut out, 1, 4, ro_off, l.rodata, img.rodata.len() as u64, img.rodata.len() as u64, page);
+    phdr(&mut out, 1, 6, data_off, l.data, data_filesz, (l.bss - l.data) + img.bss, page);
     phdr(&mut out, 0x6474_E551, 6, 0, 0, 0, 0, 16); // PT_GNU_STACK: non-executable stack
 
     let pad_to = |out: &mut Vec<u8>, off: u64| {

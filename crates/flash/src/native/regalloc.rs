@@ -17,6 +17,26 @@ use crate::ir::*;
 
 use super::asm::*;
 
+/// The registers a target offers to the allocator.
+pub struct RegConfig {
+    pub int_caller: &'static [Reg],
+    pub int_callee: &'static [Reg],
+    pub flt_caller: &'static [Reg],
+    pub flt_callee: &'static [Reg],
+}
+
+/// x86-64: rax, rcx, rdx, r11 and xmm14/15 are scratch registers of the code generator.
+pub const X86_64: RegConfig = RegConfig { int_caller: &INT_CALLER_SAVED, int_callee: &INT_CALLEE_SAVED, flt_caller: &FLT_CALLER_SAVED, flt_callee: &FLT_CALLEE_SAVED };
+
+/// AArch64: x8, x16, x17 and v30/v31 are scratch registers of the code generator; x18 is reserved
+/// (platform register on macOS), x29/x30 are the frame pointer and link register.
+pub const AARCH64: RegConfig = RegConfig {
+    int_caller: &[9, 10, 11, 12, 13, 14, 15],
+    int_callee: &[19, 20, 21, 22, 23, 24, 25, 26, 27, 28],
+    flt_caller: &[16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29],
+    flt_callee: &[8, 9, 10, 11, 12, 13, 14, 15],
+};
+
 /// Integer registers available for allocation. RAX, RCX, RDX, R11 are scratch registers of the
 /// code generator, RSP is the stack pointer.
 pub const INT_CALLER_SAVED: [Reg; 5] = [RSI, RDI, R8, R9, R10];
@@ -221,7 +241,7 @@ fn overlaps(a: &Ranges, b: &Ranges) -> bool {
     false
 }
 
-pub fn allocate(f: &Function) -> Allocation {
+pub fn allocate(f: &Function, cfg: &RegConfig) -> Allocation {
     let nv = f.vregs.len();
     let order = layout(f);
     let nb = order.len();
@@ -418,7 +438,7 @@ pub fn allocate(f: &Function) -> Allocation {
     vregs.sort_by_key(|v| (ranges[*v][0].0, *v));
 
     // assigned[class][reg] -> vregs currently holding that register (pruned lazily)
-    let mut by_reg: Vec<Vec<usize>> = vec![vec![]; 32];
+    let mut by_reg: Vec<Vec<usize>> = vec![vec![]; 64];
     let mut nslots = 0u32;
     for &v in &vregs {
         let flt = f.vregs[v].is_float();
@@ -426,16 +446,16 @@ pub fn allocate(f: &Function) -> Allocation {
         let start = ranges[v][0].0;
         let candidates: Vec<Reg> = if flt {
             if cross {
-                FLT_CALLEE_SAVED.to_vec()
+                cfg.flt_callee.to_vec()
             } else {
-                FLT_CALLER_SAVED.iter().chain(FLT_CALLEE_SAVED.iter()).copied().collect()
+                cfg.flt_caller.iter().chain(cfg.flt_callee.iter()).copied().collect()
             }
         } else if cross {
-            INT_CALLEE_SAVED.to_vec()
+            cfg.int_callee.to_vec()
         } else {
-            INT_CALLER_SAVED.iter().chain(INT_CALLEE_SAVED.iter()).copied().collect()
+            cfg.int_caller.iter().chain(cfg.int_callee.iter()).copied().collect()
         };
-        let key = |r: Reg| if flt { 16 + r as usize } else { r as usize };
+        let key = |r: Reg| if flt { 32 + r as usize } else { r as usize };
         // Prefer the register of a coalescing hint.
         let mut cands = candidates.clone();
         if let Some(h) = hint[v] {
@@ -494,10 +514,10 @@ pub fn allocate(f: &Function) -> Allocation {
     for (v, l) in loc.iter().enumerate() {
         if let Loc::Reg(r) = l {
             if f.vregs[v].is_float() {
-                if FLT_CALLEE_SAVED.contains(r) && !saved_flt.contains(r) {
+                if cfg.flt_callee.contains(r) && !saved_flt.contains(r) {
                     saved_flt.push(*r);
                 }
-            } else if INT_CALLEE_SAVED.contains(r) && !saved_int.contains(r) {
+            } else if cfg.int_callee.contains(r) && !saved_int.contains(r) {
                 saved_int.push(*r);
             }
         }
