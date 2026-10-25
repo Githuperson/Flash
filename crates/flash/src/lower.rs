@@ -10,6 +10,10 @@ use crate::ir::*;
 use crate::rtsigs;
 use crate::types::{IntTy, StructInfo, Type};
 
+/// Name and size of the runtime library's global state block.
+pub const RT_STATE_NAME: &str = "__rt_state";
+pub const RT_STATE_BYTES: usize = 65536;
+
 pub fn ir_ty(t: &Type) -> Ty {
     match t {
         Type::Int(i) => match i.bits {
@@ -43,10 +47,21 @@ pub struct Lowerer<'p> {
     strs: HashMap<String, DataId>,
     glue: HashMap<(GlueKind, Type), FuncRef>,
     tags: HashMap<String, MemTag>,
+    /// Name functions exactly as written (the runtime library, whose `fl_*` functions are looked up by name).
+    keep_names: bool,
 }
 
 pub fn lower(prog: &Program) -> Module {
-    let mut lw = Lowerer { prog, m: Module::default(), strs: HashMap::new(), glue: HashMap::new(), tags: HashMap::new() };
+    lower_with(prog, false)
+}
+
+/// Lower the runtime library: functions keep their source names.
+pub fn lower_runtime(prog: &Program) -> Module {
+    lower_with(prog, true)
+}
+
+fn lower_with(prog: &Program, keep_names: bool) -> Module {
+    let mut lw = Lowerer { prog, m: Module::default(), strs: HashMap::new(), glue: HashMap::new(), tags: HashMap::new(), keep_names };
     lw.m.tags.push(String::new());
     // Reserve function slots so calls can refer to any function by index.
     for f in &prog.funcs {
@@ -82,6 +97,15 @@ impl<'p> Lowerer<'p> {
         self.m.data.push(DataItem { name: format!(".Lstr{}", id), bytes, align: 8, writable: false });
         self.strs.insert(s.to_string(), id);
         id
+    }
+
+    /// The zero-initialised, writable block the runtime library keeps its global state in.
+    pub fn state_data(&mut self) -> DataId {
+        if let Some(id) = self.m.data.iter().position(|d| d.name == RT_STATE_NAME) {
+            return id as u32;
+        }
+        self.m.data.push(DataItem { name: RT_STATE_NAME.into(), bytes: vec![0; RT_STATE_BYTES], align: 4096, writable: true });
+        (self.m.data.len() - 1) as u32
     }
 
     pub fn raw_data(&mut self, name: &str, bytes: Vec<u8>) -> DataId {
@@ -415,7 +439,15 @@ impl<'a, 'p> FnLower<'a, 'p> {
     fn lower_func(lw: &'a mut Lowerer<'p>, hf: &'p HFunc, _idx: usize) -> Function {
         let params: Vec<Ty> = hf.params.iter().map(|p| ir_ty(&hf.locals[*p].ty)).collect();
         let ret = if hf.ret == Type::None { None } else { Some(ir_ty(&hf.ret)) };
-        let name = if hf.is_main { "flash_main".to_string() } else { format!("{}_{}", hf.name, _idx) };
+        let name = if hf.is_main && lw.keep_names {
+            "__rt_main".to_string() // the (empty) script of the runtime library itself
+        } else if hf.is_main {
+            "flash_main".to_string()
+        } else if lw.keep_names {
+            hf.name.clone()
+        } else {
+            format!("{}_{}", hf.name, _idx)
+        };
         let mut fl = FnLower::new(lw, name, params, ret);
         fl.f.exported = hf.is_main;
         fl.ret_ty = hf.ret.clone();

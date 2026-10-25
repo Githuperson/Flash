@@ -26,6 +26,7 @@ pub mod lexer;
 pub mod llvm;
 pub mod lower;
 pub mod module;
+pub mod native;
 pub mod opt;
 pub mod parser;
 pub mod pkg;

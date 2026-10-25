@@ -57,10 +57,60 @@ impl<'a> Checker<'a> {
         }
     }
 
+    /// Runtime-library intrinsics. All values are `Int` (addresses are plain integers) or `Float`.
+    /// The offset argument of `__peek`/`__poke` becomes the displacement of the machine instruction
+    /// when it is a literal and is added to the address otherwise.
+    fn intrinsic(&mut self, name: &str, args: &[&Expr], span: Span) -> R<HExpr> {
+        let module = self.cx().module;
+        if !self.mods[module].privileged {
+            return self.fail(
+                Diagnostic::error(span, format!("'{}' is reserved for the Flash runtime library.", name))
+                    .help("Names starting with two underscores are internal; use the regular built-in functions."),
+            );
+        }
+        use Builtin as B;
+        let int = Type::Int(INT);
+        let (kind, params, ret): (&'static str, &[&str], Type) = match name {
+            "__peek" => ("__peek", &["i", "off"], int.clone()),
+            "__peek8" => ("__peek8", &["i", "off"], int.clone()),
+            "__poke" => ("__poke", &["i", "off", "i"], Type::None),
+            "__poke8" => ("__poke8", &["i", "off", "i"], Type::None),
+            "__peekf" => ("__peekf", &["i", "off"], Type::Float),
+            "__pokef" => ("__pokef", &["i", "off", "f"], Type::None),
+            "__bits_to_float" => ("__bits_to_float", &["i"], Type::Float),
+            "__float_bits" => ("__float_bits", &["f"], int.clone()),
+            "__fsqrt" => ("__fsqrt", &["f"], Type::Float),
+            "__fabs" => ("__fabs", &["f"], Type::Float),
+            "__ffloor" => ("__ffloor", &["f"], Type::Float),
+            "__fceil" => ("__fceil", &["f"], Type::Float),
+            "__syscall" => ("__syscall", &["i", "i", "i", "i", "i", "i", "i"], int.clone()),
+            "__state" => ("__state", &[], int.clone()),
+            // Address of a static String object for a string literal.
+            "__str" => ("__str", &["s"], int.clone()),
+            _ => return self.fail(Diagnostic::error(span, format!("Unknown runtime intrinsic '{}'.", name))),
+        };
+        self.nargs(name, args, params.len(), span)?;
+        let mut hs = vec![];
+        for (a, p) in args.iter().zip(params) {
+            let want = match *p {
+                "f" => Type::Float,
+                "s" => Type::Str,
+                _ => int.clone(),
+            };
+            let h = self.arg_of(a, &want, name, "The argument", Ctx::Borrow)?;
+            if *p == "s" && !matches!(h.kind, HKind::Str(_)) {
+                return self.fail(Diagnostic::error(a.span, "__str() takes a string literal."));
+            }
+            hs.push(h);
+        }
+        Ok(self.mk(B::Intrinsic(kind), hs, ret, span))
+    }
+
     pub fn builtin(&mut self, name: &str, args: &[&Expr], span: Span, expected: Option<&Type>, _ctx: Ctx) -> R<HExpr> {
         use Builtin as B;
         let s_ty = Type::Str;
         match name {
+            n if n.starts_with("__") => self.intrinsic(n, args, span),
             "say" | "print" => {
                 let mut hs = vec![];
                 for a in args {

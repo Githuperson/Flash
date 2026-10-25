@@ -67,6 +67,22 @@ pub const BUILTIN_NAMES: &[&str] = &[
     "unwrap",
     "unwrap_or",
     "error_message",
+    // Low-level intrinsics, usable only in the runtime library (see runtime/*.flash).
+    "__peek",
+    "__peek8",
+    "__poke",
+    "__poke8",
+    "__peekf",
+    "__pokef",
+    "__bits_to_float",
+    "__float_bits",
+    "__fsqrt",
+    "__fabs",
+    "__ffloor",
+    "__fceil",
+    "__syscall",
+    "__state",
+    "__str",
 ];
 
 pub fn is_builtin(name: &str) -> bool {

@@ -22,8 +22,9 @@ OPTIONS:
     --link <lib>     Link a native library (.a/.o/.so) for `extern fn` declarations; also -l<name> -L<dir>
     --linker <l>     `builtin` (no C compiler needed; Linux x86-64), `system` (cc), or `auto` (default: builtin when possible)
     --no-cache       Do not reuse or store executables in the build cache (~/.cache/flash, or $FLASH_CACHE_DIR)
-    --backend <b>    Code generator: `auto` (default: LLVM for --release when clang is installed, else Cranelift),
-                     `cranelift` (fast compiles, no external tools) or `llvm` (needs clang)
+    --backend <b>    Code generator: `auto` (default: Flash's own native back end; the optional
+                     legacy back ends are used only for `extern fn`, plugins and other targets),
+                     `native`, `cranelift` or `llvm` (needs clang)
     --emit-llvm      Print the LLVM IR instead of building
 ";
 
@@ -91,10 +92,11 @@ fn main() -> ExitCode {
                 i += 1;
                 opts.backend = match rest.get(i).map(|s| s.as_str()) {
                     Some("auto") => flashc::codegen::Backend::Auto,
+                    Some("native") => flashc::codegen::Backend::Native,
                     Some("cranelift") => flashc::codegen::Backend::Cranelift,
                     Some("llvm") => flashc::codegen::Backend::Llvm,
                     other => {
-                        eprintln!("--backend must be `auto`, `cranelift` or `llvm` (got {:?})", other);
+                        eprintln!("--backend must be `auto`, `native`, `cranelift` or `llvm` (got {:?})", other);
                         return ExitCode::from(2);
                     }
                 };

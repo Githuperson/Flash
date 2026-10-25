@@ -65,7 +65,7 @@ impl<'a> Resolver<'a> {
                                 f.name_span,
                                 format!("The name '{}' is already used by another function.", f.name),
                             ));
-                        } else if f.name.starts_with("fl_") || f.name.starts_with("flash_") {
+                        } else if !m.privileged && (f.name.starts_with("fl_") || f.name.starts_with("flash_")) {
                             self.diags.push(Diagnostic::error(
                                 f.name_span,
                                 "Names starting with `fl_` or `flash_` are reserved for the Flash runtime.",

@@ -23,6 +23,9 @@ pub enum Backend {
     /// everything else, and release builds without clang, use Cranelift.
     #[default]
     Auto,
+    /// Flash's own x86-64 code generator and ELF writer: no LLVM, Cranelift, C compiler, linker or
+    /// C library involved. Linux x86-64 only; no `extern fn`, no plugins.
+    Native,
     /// Fast to compile (pure Rust, no system dependencies).
     Cranelift,
     /// Textual LLVM IR compiled by `clang`; slower to compile, better optimised code.
@@ -334,6 +337,7 @@ fn emit_inst(
                 Callee::Func(i) => func_ids[*i as usize],
                 Callee::Extern(i) => ext_ids[*i as usize],
                 Callee::Indirect(_) => unreachable!("indirect calls are not generated yet"),
+                Callee::Syscall => unreachable!("system calls exist only in the native back end"),
             };
             let fref = *frefs.entry(id).or_insert_with(|| module.declare_func_in_func(id, b.func));
             let argv: Vec<ir::Value> = args.iter().map(|a| u!(a)).collect();

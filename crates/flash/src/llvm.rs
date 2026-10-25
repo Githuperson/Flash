@@ -298,6 +298,7 @@ impl<'a> Emitter<'a> {
                         (format!("@{}", e.name), e.params.clone(), e.ret)
                     }
                     Callee::Indirect(_) => unreachable!("indirect calls are not generated"),
+                    Callee::Syscall => unreachable!("system calls exist only in the native back end"),
                 };
                 let mut argv = vec![];
                 for (a, pt) in args.iter().zip(params.iter()) {

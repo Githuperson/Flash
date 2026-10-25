@@ -524,6 +524,10 @@ fn calls_func(f: &Function, target: u32) -> bool {
 
 const INLINE_LIMIT: usize = 60;
 
+fn inline_limit() -> usize {
+    std::env::var("FLASH_DEBUG_INLINE_LIMIT").ok().and_then(|v| v.parse().ok()).unwrap_or(INLINE_LIMIT)
+}
+
 fn inline_small_functions(m: &mut Module) {
     for _round in 0..3 {
         let candidates: Vec<Option<Function>> = m
@@ -531,7 +535,7 @@ fn inline_small_functions(m: &mut Module) {
             .iter()
             .enumerate()
             .map(|(i, f)| {
-                let ok = !f.exported && !f.no_inline && inst_count(f) <= INLINE_LIMIT && !calls_func(f, i as u32);
+                let ok = !f.exported && !f.no_inline && inst_count(f) <= inline_limit() && !calls_func(f, i as u32);
                 ok.then(|| f.clone())
             })
             .collect();
@@ -676,7 +680,7 @@ fn remap_inst(i: &mut Inst, vbase: u32, sbase: u32) {
 /// Drop functions that are never called (glue that got fully inlined, unused user functions).
 /// Function indices are call targets, so unused functions are replaced by empty stubs would
 /// break numbering; instead we renumber.
-fn remove_unused_functions(m: &mut Module) {
+pub fn remove_unused_functions(m: &mut Module) {
     let n = m.funcs.len();
     let mut live = vec![false; n];
     let mut stack = vec![];

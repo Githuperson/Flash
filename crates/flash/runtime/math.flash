@@ -1,0 +1,641 @@
+# Flash runtime library, part 4: math functions.
+#
+# exp, ln, sin, cos, tan and pow are ports of the classic fdlibm algorithms (the same ones most C
+# libraries derive from), written in Flash on top of the compiler's own floating-point arithmetic.
+# Arguments of sin/cos/tan beyond 2^19 use an exact reduction with a 1150-bit value of 2/pi.
+# Word helpers: the high 32 bits of a Float are its sign, exponent and top 20 mantissa bits.
+
+fn hi_word(x: Float) -> Int:
+    return __float_bits(x) >> 32
+
+fn lo_word(x: Float) -> Int:
+    return __float_bits(x) & 4294967295
+
+fn with_hi(x: Float, hi: Int) -> Float:
+    return __bits_to_float(((hi & 4294967295) << 32) | (__float_bits(x) & 4294967295))
+
+fn clear_lo(x: Float) -> Float:
+    return __bits_to_float(__float_bits(x) & -4294967296)
+
+fn pow2(k: Int) -> Float:
+    return __bits_to_float((k + 1023) << 52)
+
+# x * 2^k for any k that keeps the result representable (two steps avoid an intermediate overflow).
+fn scale2(x: Float, k: Int) -> Float:
+    k1 = k / 2
+    return x * pow2(k1) * pow2(k - k1)
+
+fn nan_value() -> Float:
+    return __bits_to_float(9221120237041090560)
+
+fn inf_value() -> Float:
+    return __bits_to_float(9218868437227405312)
+
+fn fl_math_sqrt(x: Float) -> Float:
+    return __fsqrt(x)
+
+fn fl_math_floor(x: Float) -> Float:
+    return __ffloor(x)
+
+fn fl_math_ceil(x: Float) -> Float:
+    return __fceil(x)
+
+fn fl_math_abs(x: Float) -> Float:
+    return __fabs(x)
+
+# ------------------------------------------------------------------ exp
+fn fl_math_exp(x0: Float) -> Float:
+    x = x0
+    hx = hi_word(x)
+    neg = hx < 0
+    hx = hx & 2147483647
+    if hx >= 1082535490:
+        if hx >= 2146435072:
+            if ((hx - 2146435072) | lo_word(x)) != 0:
+                return x + x
+            if neg:
+                return 0.0
+            return x
+        if x > 709.782712893384:
+            return inf_value()
+        if x < -745.1332191019411:
+            return 0.0
+    hi = 0.0
+    lo = 0.0
+    k = 0
+    if hx > 1071001154:
+        if hx < 1072734898:
+            if neg:
+                hi = x + 0.693147180369123816490
+                lo = -0.0000000001908214929270587700
+                k = -1
+            else:
+                hi = x - 0.693147180369123816490
+                lo = 0.0000000001908214929270587700
+                k = 1
+        else:
+            half = 0.5
+            if neg:
+                half = -0.5
+            k = int(1.44269504088896338700 * x + half)
+            t = float(k)
+            hi = x - t * 0.693147180369123816490
+            lo = t * 0.0000000001908214929270587700
+        x = hi - lo
+    elif hx < 1043333120:
+        return 1.0 + x
+    t = x * x
+    c = x - t * (0.166666666666666019037 + t * (-0.00277777777770155933842 + t * (0.0000661375632143793436117 + t * (-0.00000165339022054652515390 + t * 0.0000000413813679705723846039))))
+    if k == 0:
+        return 1.0 - ((x * c) / (c - 2.0) - x)
+    y = 1.0 - ((lo - (x * c) / (2.0 - c)) - hi)
+    return scale2(y, k)
+
+# ------------------------------------------------------------------ ln
+fn fl_math_ln(x0: Float) -> Float:
+    x = x0
+    hx = hi_word(x)
+    lx = lo_word(x)
+    k = 0
+    if hx < 1048576:
+        if ((hx & 2147483647) | lx) == 0:
+            return 0.0 - inf_value()
+        if hx < 0:
+            return nan_value()
+        k -= 54
+        x = x * 18014398509481984.0
+        hx = hi_word(x)
+    if hx >= 2146435072:
+        return x + x
+    k += (hx >> 20) - 1023
+    hx = hx & 1048575
+    i = (hx + 614244) & 1048576
+    x = with_hi(x, hx | (i ^ 1072693248))
+    k += i >> 20
+    f = x - 1.0
+    dk = float(k)
+    if (1048575 & (2 + hx)) < 3:
+        if f == 0.0:
+            if k == 0:
+                return 0.0
+            return dk * 0.693147180369123816490 + dk * 0.0000000001908214929270587700
+        r = f * f * (0.5 - 0.33333333333333333 * f)
+        if k == 0:
+            return f - r
+        return dk * 0.693147180369123816490 - ((r - dk * 0.0000000001908214929270587700) - f)
+    s = f / (2.0 + f)
+    z = s * s
+    i = hx - 400762
+    w = z * z
+    j = 440017 - hx
+    t1 = w * (0.3999999999940941908 + w * (0.2222219843214978396 + w * 0.1531383769920937332))
+    t2 = z * (0.6666666666666735130 + w * (0.2857142874366239149 + w * (0.1818357216161805012 + w * 0.1479819860511658591)))
+    i = i | j
+    r = t2 + t1
+    if i > 0:
+        hfsq = 0.5 * f * f
+        if k == 0:
+            return f - (hfsq - s * (hfsq + r))
+        return dk * 0.693147180369123816490 - ((hfsq - (s * (hfsq + r) + dk * 0.0000000001908214929270587700)) - f)
+    if k == 0:
+        return f - s * (f - r)
+    return dk * 0.693147180369123816490 - ((s * (f - r) - dk * 0.0000000001908214929270587700) - f)
+
+# ------------------------------------------------------------------ sin / cos / tan
+fn kernel_sin(x: Float, y: Float, iy: Int) -> Float:
+    ix = hi_word(x) & 2147483647
+    if ix < 1042284544:
+        if int(x) == 0:
+            return x
+    z = x * x
+    v = z * x
+    r = 0.00833333333332248946124 + z * (-0.000198412698298579493134 + z * (0.00000275573137070700676789 + z * (-0.0000000250507602534068634195 + z * 0.000000000158969099521155010221)))
+    if iy == 0:
+        return x + v * (-0.166666666666666324348 + z * r)
+    return x - ((z * (0.5 * y - v * r) - y) - v * (-0.166666666666666324348))
+
+fn kernel_cos(x: Float, y: Float) -> Float:
+    ix = hi_word(x) & 2147483647
+    if ix < 1044381696:
+        if int(x) == 0:
+            return 1.0
+    z = x * x
+    r = z * (0.0416666666666666019037 + z * (-0.00138888888888741095749 + z * (0.0000248015872894767294178 + z * (-0.000000275573143513906633035 + z * (0.00000000208757232129817482790 + z * (-0.0000000000113596475577881948265))))))
+    if ix < 1070805811:
+        return 1.0 - (0.5 * z - (z * r - x * y))
+    qx = 0.28125
+    if ix <= 1072365568:
+        qx = __bits_to_float((ix - 2097152) << 32)
+    hz = 0.5 * z - qx
+    a = 1.0 - qx
+    return a - (hz - (z * r - x * y))
+
+fn kernel_tan(x0: Float, y0: Float, iy: Int) -> Float:
+    x = x0
+    y = y0
+    hx = hi_word(x)
+    ix = hx & 2147483647
+    if ix < 1043333120:
+        if int(x) == 0:
+            if ((ix | lo_word(x)) | (iy + 1)) == 0:
+                return 1.0 / __fabs(x)
+            if iy == 1:
+                return x
+            w = x + y
+            z = clear_lo(w)
+            v = y - (z - x)
+            a = -1.0 / w
+            t = clear_lo(a)
+            s = 1.0 + t * z
+            return t + a * (s + t * v)
+    big = ix >= 1072010280
+    if big:
+        if hx < 0:
+            x = 0.0 - x
+            y = 0.0 - y
+        z = 0.785398163397448278999 - x
+        w = 0.0000000000000000306161699786838301793 - y
+        x = z + w
+        y = 0.0
+    z = x * x
+    w = z * z
+    r = 0.133333333333201242699 + w * (0.0218694882948595424599 + w * (0.00359207910759131235356 + w * (0.000588041240820264096874 + w * (0.0000781794442939557092300 + w * (-0.0000185586374855275456654)))))
+    v = z * (0.0539682539762260521377 + w * (0.00886323982359930005737 + w * (0.00145620945432529025516 + w * (0.000246463134818469906812 + w * (0.0000714072491382608190305 + w * 0.0000259073051863633712884)))))
+    s = z * x
+    r = y + z * (s * (r + v) + y)
+    r = r + 0.333333333333334091986 * s
+    w = x + r
+    if big:
+        v = float(iy)
+        sgn = float(1 - ((hx >> 30) & 2))
+        return sgn * (v - 2.0 * (x - (w * w / (w + v) - r)))
+    if iy == 1:
+        return w
+    z = clear_lo(w)
+    v = r - (z - x)
+    a = -1.0 / w
+    t = clear_lo(a)
+    s = 1.0 + t * z
+    return t + a * (s + t * v)
+
+# ---- argument reduction: returns n (quadrant, may be negative) and stores y0, y1 (a double-double
+# remainder in [-pi/4, pi/4]) at state + 96 and state + 104.
+fn rem_pio2(x: Float) -> Int:
+    st = __state()
+    hx = hi_word(x)
+    ix = hx & 2147483647
+    if ix <= 1072243195:
+        __pokef(st, 96, x)
+        __pokef(st, 104, 0.0)
+        return 0
+    if ix < 1073928572:
+        if hx > 0:
+            z = x - 1.57079632673412561417
+            if ix != 1073291771:
+                y0 = z - 0.0000000000607710050650619224932
+                __pokef(st, 96, y0)
+                __pokef(st, 104, (z - y0) - 0.0000000000607710050650619224932)
+            else:
+                z = z - 0.0000000000607710050630396597660
+                y0 = z - 0.00000000000000000000202226624879595063154
+                __pokef(st, 96, y0)
+                __pokef(st, 104, (z - y0) - 0.00000000000000000000202226624879595063154)
+            return 1
+        z = x + 1.57079632673412561417
+        if ix != 1073291771:
+            y0 = z + 0.0000000000607710050650619224932
+            __pokef(st, 96, y0)
+            __pokef(st, 104, (z - y0) + 0.0000000000607710050650619224932)
+        else:
+            z = z + 0.0000000000607710050630396597660
+            y0 = z + 0.00000000000000000000202226624879595063154
+            __pokef(st, 96, y0)
+            __pokef(st, 104, (z - y0) + 0.00000000000000000000202226624879595063154)
+        return -1
+    if ix <= 1094263291:
+        t = __fabs(x)
+        n = int(t * 0.636619772367581382433 + 0.5)
+        fnn = float(n)
+        r = t - fnn * 1.57079632673412561417
+        w = fnn * 0.0000000000607710050650619224932
+        y0 = r - w
+        j = ix >> 20
+        i = j - ((hi_word(y0) >> 20) & 2047)
+        if i > 16:
+            t = r
+            w = fnn * 0.0000000000607710050630396597660
+            r = t - w
+            w = fnn * 0.00000000000000000000202226624879595063154 - ((t - r) - w)
+            y0 = r - w
+            i = j - ((hi_word(y0) >> 20) & 2047)
+            if i > 49:
+                t = r
+                w = fnn * 0.00000000000000000000202226624871116645580
+                r = t - w
+                w = fnn * 0.0000000000000000000000000000000847842766036889956997 - ((t - r) - w)
+                y0 = r - w
+        y1 = (r - y0) - w
+        if hx < 0:
+            __pokef(st, 96, 0.0 - y0)
+            __pokef(st, 104, 0.0 - y1)
+            return 0 - n
+        __pokef(st, 96, y0)
+        __pokef(st, 104, y1)
+        return n
+    if ix >= 2146435072:
+        v = x - x
+        __pokef(st, 96, v)
+        __pokef(st, 104, v)
+        return 0
+    return rem_pio2_huge(x)
+
+# ---- exact reduction for huge arguments (Payne-Hanek with big numbers)
+fn bn_from_hex(b: Int, s: Int):
+    n = __peek(s, 0)
+    __poke(b, 0, 0)
+    t = bn(6)
+    i = 0
+    while i < n:
+        c = __peek8(s + 16, i)
+        d = c - 48
+        if c >= 97:
+            d = c - 87
+        bn_mul_small(b, 16)
+        if d != 0:
+            bn_set(t, u64(d))
+            bn_add(b, t)
+        i += 1
+
+fn bn_bit(b: Int, i: Int) -> Int:
+    w = i / 32 + 1
+    if w > __peek(b, 0):
+        return 0
+    return (__peek(b, w * 8) >> (i % 32)) & 1
+
+# dst = a * b (dst must differ from a and b)
+fn bn_mul(dst: Int, a: Int, b: Int):
+    na = __peek(a, 0)
+    nb = __peek(b, 0)
+    i = 1
+    while i <= na + nb:
+        __poke(dst, i * 8, 0)
+        i += 1
+    i = 1
+    while i <= na:
+        carry: u64 = 0
+        x: u64 = u64(__peek(a, i * 8))
+        j = 1
+        while j <= nb:
+            cur: u64 = u64(__peek(dst, (i + j - 1) * 8)) + x * u64(__peek(b, j * 8)) + carry
+            __poke(dst, (i + j - 1) * 8, int(cur & 4294967295))
+            carry = cur >> 32
+            j += 1
+        __poke(dst, (i + nb) * 8, int(carry))
+        i += 1
+    __poke(dst, 0, na + nb)
+    bn_trim(dst)
+
+fn rem_pio2_huge(x: Float) -> Int:
+    st = __state()
+    bits = __float_bits(x)
+    neg = bits < 0
+    eb = (bits >> 52) & 2047
+    f = (bits & 4503599627370495) | 4503599627370496
+    e = eb - 1075
+    two_over_pi = bn(7)
+    bn_from_hex(two_over_pi, __str("28be60db9391054a7f09d5f47d4d377036d8a5664f10e4107f9458eaf7aef1586dc91b8e909374b801924bba827464873f877ac72c4a69cfba208d7d4baed1213a671c09ad17df904e64758e60d4ce7d272117e2ef7e4a0ec7fe25fff7816603fbcbc462d6829b47db4d9fb3c9f2c26dd3d18fd9a797fa8b5d49eeb1faf97c5ecf41ce7de294a4ba9afed7ec47e35742"))
+    prod = bn(8)
+    fb = bn(9)
+    bn_set(fb, u64(f))
+    bn_mul(prod, two_over_pi, fb)
+    # x * 2/pi = prod * 2^(e - 1150): the binary point sits `shift` bits above the bottom of prod.
+    shift = 1150 - e
+    n = bn_bit(prod, shift) | (bn_bit(prod, shift + 1) << 1)
+    # The 128 bits below the binary point, as a fraction in [0, 1).
+    frac = bn(10)
+    one = bn(11)
+    bn_set(frac, u64(0))
+    bn_set(one, u64(1))
+    i = 1
+    while i <= 128:
+        bn_shl(frac, 1)
+        if bn_bit(prod, shift - i) != 0:
+            bn_add(frac, one)
+        i += 1
+    negate = False
+    if bn_bit(prod, shift - 1) != 0:
+        # fraction >= 0.5: take the next multiple of pi/2 and a negative remainder
+        n += 1
+        full = bn(11)
+        bn_set(full, u64(1))
+        bn_shl(full, 128)
+        bn_sub(full, frac)
+        bn_copy(frac, full)
+        negate = True
+    pio2 = bn(12)
+    bn_from_hex(pio2, __str("1921fb54442d18469898cc51701b839a252049c1114cf98e8"))
+    w = bn(13)
+    bn_mul(w, frac, pio2)
+    # w * 2^-320 is the remainder in radians; split it into two doubles.
+    y0 = 0.0
+    y1 = 0.0
+    l = bn_bitlen(w)
+    if l > 0:
+        sh = l - 62
+        if sh < 0:
+            sh = 0
+        top = bn_top_bits(w, sh)
+        y0 = __bits_to_float(assemble_double(top, sh - 320, bn_low_bits_nonzero(w, sh)))
+        if sh > 0:
+            rest = bn(14)
+            tb = bn(15)
+            bn_copy(rest, w)
+            bn_set(tb, u64(top))
+            bn_shl(tb, sh)
+            bn_sub(rest, tb)
+            ls = bn_bitlen(rest)
+            if ls > 0:
+                sh2 = ls - 62
+                if sh2 < 0:
+                    sh2 = 0
+                top2 = bn_top_bits(rest, sh2)
+                y1 = __bits_to_float(assemble_double(top2, sh2 - 320, bn_low_bits_nonzero(rest, sh2)))
+    if negate:
+        y0 = 0.0 - y0
+        y1 = 0.0 - y1
+    if neg:
+        n = 0 - n
+        y0 = 0.0 - y0
+        y1 = 0.0 - y1
+    __pokef(st, 96, y0)
+    __pokef(st, 104, y1)
+    return n
+
+fn fl_math_sin(x: Float) -> Float:
+    ix = hi_word(x) & 2147483647
+    if ix <= 1072243195:
+        return kernel_sin(x, 0.0, 0)
+    if ix >= 2146435072:
+        return x - x
+    n = rem_pio2(x)
+    st = __state()
+    y0 = __peekf(st, 96)
+    y1 = __peekf(st, 104)
+    q = n & 3
+    if q == 0:
+        return kernel_sin(y0, y1, 1)
+    if q == 1:
+        return kernel_cos(y0, y1)
+    if q == 2:
+        return 0.0 - kernel_sin(y0, y1, 1)
+    return 0.0 - kernel_cos(y0, y1)
+
+fn fl_math_cos(x: Float) -> Float:
+    ix = hi_word(x) & 2147483647
+    if ix <= 1072243195:
+        return kernel_cos(x, 0.0)
+    if ix >= 2146435072:
+        return x - x
+    n = rem_pio2(x)
+    st = __state()
+    y0 = __peekf(st, 96)
+    y1 = __peekf(st, 104)
+    q = n & 3
+    if q == 0:
+        return kernel_cos(y0, y1)
+    if q == 1:
+        return 0.0 - kernel_sin(y0, y1, 1)
+    if q == 2:
+        return 0.0 - kernel_cos(y0, y1)
+    return kernel_sin(y0, y1, 1)
+
+fn fl_math_tan(x: Float) -> Float:
+    ix = hi_word(x) & 2147483647
+    if ix <= 1072243195:
+        return kernel_tan(x, 0.0, 1)
+    if ix >= 2146435072:
+        return x - x
+    n = rem_pio2(x)
+    st = __state()
+    y0 = __peekf(st, 96)
+    y1 = __peekf(st, 104)
+    return kernel_tan(y0, y1, 1 - ((n & 1) << 1))
+
+# ------------------------------------------------------------------ pow
+fn pow_ret_inf(s: Float, neg: Bool) -> Float:
+    if neg:
+        return s * 0.0
+    return s * inf_value()
+
+fn fl_math_pow(x: Float, y: Float) -> Float:
+    hx = hi_word(x)
+    lx = lo_word(x)
+    hy = hi_word(y)
+    ly = lo_word(y)
+    ix = hx & 2147483647
+    iy = hy & 2147483647
+    if (iy | ly) == 0:
+        return 1.0
+    if ix > 2146435072 or (ix == 2146435072 and lx != 0) or iy > 2146435072 or (iy == 2146435072 and ly != 0):
+        return x + y
+    yisint = 0
+    if hx < 0:
+        if iy >= 1128267776:
+            yisint = 2
+        elif iy >= 1072693248:
+            k = (iy >> 20) - 1023
+            if k > 20:
+                j = ly >> (52 - k)
+                if (j << (52 - k)) == ly:
+                    yisint = 2 - (j & 1)
+            elif ly == 0:
+                j = iy >> (20 - k)
+                if (j << (20 - k)) == iy:
+                    yisint = 2 - (j & 1)
+    if ly == 0:
+        if iy == 2146435072:
+            if ((ix - 1072693248) | lx) == 0:
+                return y - y
+            if ix >= 1072693248:
+                if hy >= 0:
+                    return y
+                return 0.0
+            if hy < 0:
+                return 0.0 - y
+            return 0.0
+        if iy == 1072693248:
+            if hy < 0:
+                return 1.0 / x
+            return x
+        if hy == 1073741824:
+            return x * x
+        if hy == 1071644672:
+            if hx >= 0:
+                return __fsqrt(x)
+    ax = __fabs(x)
+    if lx == 0:
+        if ix == 2146435072 or ix == 0 or ix == 1072693248:
+            z = ax
+            if hy < 0:
+                z = 1.0 / z
+            if hx < 0:
+                if ((ix - 1072693248) | yisint) == 0:
+                    z = (z - z) / (z - z)
+                elif yisint == 1:
+                    z = 0.0 - z
+            return z
+    n = (hx >> 31) + 1
+    if (n | yisint) == 0:
+        return (x - x) / (x - x)
+    s = 1.0
+    if (n | (yisint - 1)) == 0:
+        s = -1.0
+    t1 = 0.0
+    t2 = 0.0
+    if iy > 1105199104:
+        if iy > 1139802112:
+            if ix <= 1072693247:
+                return pow_ret_inf(1.0, hy >= 0)
+            if ix >= 1072693248:
+                return pow_ret_inf(1.0, hy <= 0)
+        if ix < 1072693247:
+            return pow_ret_inf(s, hy >= 0)
+        if ix > 1072693248:
+            return pow_ret_inf(s, hy <= 0)
+        t = ax - 1.0
+        w = (t * t) * (0.5 - t * (0.3333333333333333333333 - t * 0.25))
+        u = 1.44269502162933349609 * t
+        v = t * 0.0000000192596299112661746887 - w * 1.44269504088896338700
+        t1 = clear_lo(u + v)
+        t2 = v - (t1 - u)
+    else:
+        nn = 0
+        if ix < 1048576:
+            ax = ax * 9007199254740992.0
+            nn -= 53
+            ix = hi_word(ax)
+        nn += (ix >> 20) - 1023
+        j = ix & 1048575
+        ix = j | 1072693248
+        k = 0
+        if j <= 235662:
+            k = 0
+        elif j < 767610:
+            k = 1
+        else:
+            k = 0
+            nn += 1
+            ix -= 1048576
+        ax = with_hi(ax, ix)
+        bp = 1.0
+        dp_h = 0.0
+        dp_l = 0.0
+        if k == 1:
+            bp = 1.5
+            dp_h = 0.584962487220764160156
+            dp_l = 0.0000000135003920212974897128
+        u = ax - bp
+        v = 1.0 / (ax + bp)
+        ss = u * v
+        s_h = clear_lo(ss)
+        t_h = __bits_to_float((((ix >> 1) | 536870912) + 524288 + (k << 18)) << 32)
+        t_l = ax - (t_h - bp)
+        s_l = v * ((u - s_h * t_h) - s_h * t_l)
+        s2 = ss * ss
+        r = s2 * s2 * (0.599999999999994648725 + s2 * (0.428571428578550184252 + s2 * (0.333333329818377432918 + s2 * (0.272728123808534006489 + s2 * (0.230660745775561754067 + s2 * 0.206975017800338417784)))))
+        r = r + s_l * (s_h + ss)
+        s2 = s_h * s_h
+        t_h = clear_lo(3.0 + s2 + r)
+        t_l = r - ((t_h - 3.0) - s2)
+        u = s_h * t_h
+        v = s_l * t_h + t_l * ss
+        p_h = clear_lo(u + v)
+        p_l = v - (p_h - u)
+        z_h = 0.961796700954437255859 * p_h
+        z_l = (-0.00000000702846165095275826516) * p_h + p_l * 0.961796693925975554329 + dp_l
+        t = float(nn)
+        t1 = clear_lo(((z_h + z_l) + dp_h) + t)
+        t2 = z_l - (((t1 - t) - dp_h) - z_h)
+    y1 = clear_lo(y)
+    p_l = (y - y1) * t1 + y * t2
+    p_h = y1 * t1
+    z = p_l + p_h
+    j = hi_word(z)
+    i = lo_word(z)
+    if j >= 1083179008:
+        if ((j - 1083179008) | i) != 0:
+            return s * inf_value()
+        if p_l + 0.000000000000000080085662595372944372 > z - p_h:
+            return s * inf_value()
+    elif (j & 2147483647) >= 1083231232:
+        if j != -1064252416 or i != 0:
+            return s * 0.0
+        if p_l <= z - p_h:
+            return s * 0.0
+    i = j & 2147483647
+    k = (i >> 20) - 1023
+    nn = 0
+    if i > 1071644672:
+        nn = j + (1048576 >> (k + 1))
+        k = ((nn & 2147483647) >> 20) - 1023
+        t = with_hi(0.0, nn & ~(1048575 >> k))
+        nn = ((nn & 1048575) | 1048576) >> (20 - k)
+        if j < 0:
+            nn = 0 - nn
+        p_h = p_h - t
+    t = clear_lo(p_l + p_h)
+    u = t * 0.693147182464599609375
+    v = (p_l - (t - p_h)) * 0.693147180559945286227 + t * (-0.00000000190465429995776804525)
+    z = u + v
+    w = v - (z - u)
+    t = z * z
+    t1 = z - t * (0.166666666666666019037 + t * ((-0.00277777777770155933842) + t * (0.0000661375632143793436117 + t * ((-0.00000165339022054652515390) + t * 0.0000000413813679705723846039))))
+    r = (z * t1) / (t1 - 2.0) - (w + z * w)
+    z = 1.0 - (r - z)
+    j = hi_word(z)
+    j += nn << 20
+    if (j >> 20) <= 0:
+        z = scale2(z, nn)
+    else:
+        z = with_hi(z, j)
+    return s * z

@@ -273,6 +273,7 @@ impl<'a, 'p> FnLower<'a, 'p> {
                 let b2 = self.borrow(&args[1]);
                 self.rtv("fl_math_pow", &[a, b2])
             }
+            B::Intrinsic(name) => self.intrinsic(name, args),
             B::Exit => {
                 let c = self.expr(&args[0]);
                 self.rt("fl_exit", &[c]);
@@ -429,6 +430,91 @@ impl<'a, 'p> FnLower<'a, 'p> {
                 res
             }
             B::ToInt(_) | B::ToFloat => unreachable!(),
+        }
+    }
+}
+
+impl<'a, 'p> FnLower<'a, 'p> {
+    /// Lowering of the runtime-library intrinsics (see `check_builtins.rs`).
+    fn intrinsic(&mut self, name: &str, args: &[HExpr]) -> VReg {
+        // (base register, displacement) for an address `args[0] + args[1]`.
+        let mut addr = |s: &mut Self| -> (VReg, i32) {
+            let base = s.expr(&args[0]);
+            match args[1].kind {
+                HKind::Int(n) if i32::try_from(n).is_ok() => (base, n as i32),
+                _ => {
+                    let off = s.expr(&args[1]);
+                    (s.bin(BinOp::Add, base, off), 0)
+                }
+            }
+        };
+        match name {
+            "__peek" | "__peek8" | "__peekf" => {
+                let (base, off) = addr(self);
+                let ty = match name {
+                    "__peek" => Ty::I64,
+                    "__peek8" => Ty::I8,
+                    _ => Ty::F64,
+                };
+                let v = self.vreg(ty);
+                self.emit(Inst::Load { dst: v, base, off, tag: NO_TAG });
+                if name == "__peek8" {
+                    let w = self.vreg(Ty::I64);
+                    self.emit(Inst::Cast { dst: w, op: CastOp::ZExt, src: v });
+                    return w;
+                }
+                v
+            }
+            "__poke" | "__poke8" | "__pokef" => {
+                let (base, off) = addr(self);
+                let mut val = self.expr(&args[2]);
+                if name == "__poke8" {
+                    let t = self.vreg(Ty::I8);
+                    self.emit(Inst::Cast { dst: t, op: CastOp::Trunc, src: val });
+                    val = t;
+                }
+                self.emit(Inst::Store { base, off, val, tag: NO_TAG });
+                self.dummy()
+            }
+            "__bits_to_float" | "__float_bits" => {
+                let a = self.expr(&args[0]);
+                let (op, ty) = if name == "__float_bits" { (CastOp::FBitsToI, Ty::I64) } else { (CastOp::IBitsToF, Ty::F64) };
+                let d = self.vreg(ty);
+                self.emit(Inst::Cast { dst: d, op, src: a });
+                d
+            }
+            "__fsqrt" | "__fabs" | "__ffloor" | "__fceil" => {
+                let a = self.expr(&args[0]);
+                let op = match name {
+                    "__fsqrt" => UnOp::FSqrt,
+                    "__fabs" => UnOp::FAbs,
+                    "__ffloor" => UnOp::FFloor,
+                    _ => UnOp::FCeil,
+                };
+                let d = self.vreg(Ty::F64);
+                self.emit(Inst::Un { dst: d, op, a });
+                d
+            }
+            "__syscall" => {
+                let vs: Vec<VReg> = args.iter().map(|a| self.expr(a)).collect();
+                let d = self.vreg(Ty::I64);
+                self.emit(Inst::Call { dst: Some(d), callee: Callee::Syscall, args: vs });
+                d
+            }
+            "__str" => {
+                let HKind::Str(text) = &args[0].kind else { unreachable!("checked: a literal") };
+                let id = self.lw.string_data(text);
+                let d = self.vreg(Ty::I64);
+                self.emit(Inst::DataAddr { dst: d, data: id });
+                d
+            }
+            "__state" => {
+                let id = self.lw.state_data();
+                let d = self.vreg(Ty::I64);
+                self.emit(Inst::DataAddr { dst: d, data: id });
+                d
+            }
+            _ => unreachable!("intrinsic {}", name),
         }
     }
 }

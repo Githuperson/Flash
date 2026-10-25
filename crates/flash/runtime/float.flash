@@ -1,0 +1,654 @@
+# Flash runtime library, part 3: floating-point text. Printing produces the shortest decimal text
+# that reads back as the same Float (the same text Rust's `{:?}` produces); parsing is correctly
+# rounded. Both use a tiny big-number library on the scratch area at state + 3072.
+#
+# Big number at address b: word 0 = number of 32-bit limbs in use, then up to 40 limbs
+# (one per 8-byte word, least significant first). The top limb is never zero (0 has no limbs).
+
+fn bn(i: Int) -> Int:
+    return __state() + 3072 + i * 336
+
+fn bn_set(b: Int, v: u64):
+    lo = int(v & 4294967295)
+    hi = int(v >> 32)
+    if hi != 0:
+        __poke(b, 8, lo)
+        __poke(b, 16, hi)
+        __poke(b, 0, 2)
+    elif lo != 0:
+        __poke(b, 8, lo)
+        __poke(b, 0, 1)
+    else:
+        __poke(b, 0, 0)
+
+fn bn_copy(dst: Int, src: Int):
+    n = __peek(src, 0)
+    i = 0
+    while i <= n:
+        __poke(dst, i * 8, __peek(src, i * 8))
+        i += 1
+
+fn bn_trim(b: Int):
+    n = __peek(b, 0)
+    while n > 0 and __peek(b, n * 8) == 0:
+        n -= 1
+    __poke(b, 0, n)
+
+fn bn_mul_small(b: Int, m: Int):
+    n = __peek(b, 0)
+    carry = 0
+    i = 1
+    while i <= n:
+        t = __peek(b, i * 8) * m + carry
+        __poke(b, i * 8, t & 4294967295)
+        carry = t >> 32
+        i += 1
+    if carry != 0:
+        __poke(b, (n + 1) * 8, carry)
+        __poke(b, 0, n + 1)
+
+fn bn_mul_pow10(b: Int, k: Int):
+    left = k
+    while left >= 9:
+        bn_mul_small(b, 1000000000)
+        left -= 9
+    if left > 0:
+        m = 1
+        i = 0
+        while i < left:
+            m = m * 10
+            i += 1
+        bn_mul_small(b, m)
+
+fn bn_shl(b: Int, bits: Int):
+    n = __peek(b, 0)
+    if n == 0 or bits == 0:
+        return
+    w = bits >> 5
+    r = bits & 31
+    # Whole limbs: move up, top first.
+    if w > 0:
+        i = n
+        while i >= 1:
+            __poke(b, (i + w) * 8, __peek(b, i * 8))
+            i -= 1
+        i = 1
+        while i <= w:
+            __poke(b, i * 8, 0)
+            i += 1
+        n += w
+    if r > 0:
+        carry = 0
+        i = w + 1
+        while i <= n:
+            t = (__peek(b, i * 8) << r) | carry
+            __poke(b, i * 8, t & 4294967295)
+            carry = t >> 32
+            i += 1
+        if carry != 0:
+            n += 1
+            __poke(b, n * 8, carry)
+    __poke(b, 0, n)
+
+fn bn_shr1(b: Int):
+    n = __peek(b, 0)
+    i = 1
+    while i <= n:
+        t = __peek(b, i * 8) >> 1
+        if i < n:
+            t = t | ((__peek(b, (i + 1) * 8) & 1) << 31)
+        __poke(b, i * 8, t)
+        i += 1
+    bn_trim(b)
+
+# a += b
+fn bn_add(a: Int, b: Int):
+    na = __peek(a, 0)
+    nb = __peek(b, 0)
+    n = na
+    if nb > n:
+        n = nb
+    carry = 0
+    i = 1
+    while i <= n:
+        x = 0
+        if i <= na:
+            x = __peek(a, i * 8)
+        y = 0
+        if i <= nb:
+            y = __peek(b, i * 8)
+        t = x + y + carry
+        __poke(a, i * 8, t & 4294967295)
+        carry = t >> 32
+        i += 1
+    if carry != 0:
+        n += 1
+        __poke(a, n * 8, carry)
+    __poke(a, 0, n)
+
+# a -= b (requires a >= b)
+fn bn_sub(a: Int, b: Int):
+    na = __peek(a, 0)
+    nb = __peek(b, 0)
+    borrow = 0
+    i = 1
+    while i <= na:
+        y = 0
+        if i <= nb:
+            y = __peek(b, i * 8)
+        t = __peek(a, i * 8) - y - borrow
+        if t < 0:
+            t += 4294967296
+            borrow = 1
+        else:
+            borrow = 0
+        __poke(a, i * 8, t)
+        i += 1
+    bn_trim(a)
+
+fn bn_cmp(a: Int, b: Int) -> Int:
+    na = __peek(a, 0)
+    nb = __peek(b, 0)
+    if na != nb:
+        if na < nb:
+            return -1
+        return 1
+    i = na
+    while i >= 1:
+        x = __peek(a, i * 8)
+        y = __peek(b, i * 8)
+        if x != y:
+            if x < y:
+                return -1
+            return 1
+        i -= 1
+    return 0
+
+fn bits32(x: Int) -> Int:
+    n = 0
+    v = x
+    while v != 0:
+        n += 1
+        v = v >> 1
+    return n
+
+fn bn_bitlen(b: Int) -> Int:
+    n = __peek(b, 0)
+    if n == 0:
+        return 0
+    return (n - 1) * 32 + bits32(__peek(b, n * 8))
+
+fn bn_is_zero(b: Int) -> Bool:
+    return __peek(b, 0) == 0
+
+# ------------------------------------------------------------------ shortest digits (Dragon4)
+# Writes the shortest digits of the positive finite Float v to st + 1600 (values 0..9) and returns
+# k such that v = 0.d1d2...dn * 10^k. The number of digits is stored at st + 72.
+fn float_digits_slow(v: Float) -> Int:
+    st = __state()
+    bits = __float_bits(v)
+    eb = (bits >> 52) & 2047
+    frac = bits & 4503599627370495
+    f = frac
+    e = -1074
+    if eb != 0:
+        f = frac | 4503599627370496
+        e = eb - 1075
+    even = (f & 1) == 0
+    r = bn(0)
+    s = bn(1)
+    mp = bn(2)
+    mm = bn(3)
+    t = bn(4)
+    unequal = f == 4503599627370496 and eb > 1
+    if e >= 0:
+        bn_set(r, u64(f))
+        if not unequal:
+            bn_shl(r, e + 1)
+            bn_set(s, u64(2))
+            bn_set(mp, u64(1))
+            bn_shl(mp, e)
+        else:
+            bn_shl(r, e + 2)
+            bn_set(s, u64(4))
+            bn_set(mp, u64(1))
+            bn_shl(mp, e + 1)
+        bn_set(mm, u64(1))
+        bn_shl(mm, e)
+    else:
+        bn_set(r, u64(f))
+        bn_set(s, u64(1))
+        if not unequal:
+            bn_shl(r, 1)
+            bn_shl(s, 1 - e)
+            bn_set(mp, u64(1))
+        else:
+            bn_shl(r, 2)
+            bn_shl(s, 2 - e)
+            bn_set(mp, u64(2))
+        bn_set(mm, u64(1))
+    # Estimate k = ceil(log10(v)) from the binary exponent (never too high, at most 1 too low).
+    fl = e + bits32(f) - 1
+    est = int(ceil(float(fl) * 0.30102999566398114 - 0.0000000001))
+    if est >= 0:
+        bn_mul_pow10(s, est)
+    else:
+        bn_mul_pow10(r, 0 - est)
+        bn_mul_pow10(mp, 0 - est)
+        bn_mul_pow10(mm, 0 - est)
+    k = est
+    bn_copy(t, r)
+    bn_add(t, mp)
+    c = bn_cmp(t, s)
+    high = c > 0
+    if even:
+        high = c >= 0
+    if high:
+        k = est + 1
+    else:
+        bn_mul_small(r, 10)
+        bn_mul_small(mp, 10)
+        bn_mul_small(mm, 10)
+    out = st + 1600
+    n = 0
+    while True:
+        d = 0
+        while bn_cmp(r, s) >= 0:
+            bn_sub(r, s)
+            d += 1
+        c1 = bn_cmp(r, mm)
+        tc1 = c1 < 0
+        if even:
+            tc1 = c1 <= 0
+        bn_copy(t, r)
+        bn_add(t, mp)
+        c2 = bn_cmp(t, s)
+        tc2 = c2 > 0
+        if even:
+            tc2 = c2 >= 0
+        if not tc1 and not tc2:
+            __poke8(out, n, d)
+            n += 1
+            bn_mul_small(r, 10)
+            bn_mul_small(mp, 10)
+            bn_mul_small(mm, 10)
+            continue
+        up = False
+        if tc1 and tc2:
+            bn_shl(r, 1)
+            up = bn_cmp(r, s) >= 0
+        elif tc2:
+            up = True
+        if up:
+            d += 1
+        # Propagate a carry out of a digit that became 10 (cannot normally happen).
+        __poke8(out, n, d)
+        n += 1
+        i = n - 1
+        while i > 0 and __peek8(out, i) == 10:
+            __poke8(out, i, 0)
+            __poke8(out, i - 1, __peek8(out, i - 1) + 1)
+            i -= 1
+        if __peek8(out, 0) == 10:
+            __poke8(out, 0, 1)
+            k += 1
+        break
+    __poke(st, 72, n)
+    return k
+
+# Digits of short decimals found by scaling: returns k as above, or a huge sentinel when v
+# needs the slow path. The value must be positive and below 1e15.
+fn float_digits_fast(a: Float) -> Int:
+    st = __state()
+    scale = 1.0
+    p = 0
+    while p <= 15:
+        scaled = a * scale
+        if scaled >= 1000000000000000.0:
+            return 1000000
+        t = __ffloor(scaled)
+        if t == scaled and t / scale == a:
+            # t is an integer below 1e15: its digits, without trailing zeros.
+            end = st + 1100
+            start = fmt_u64(u64(int(t)), end)
+            n = end - start
+            while n > 1 and __peek8(start, n - 1) == 48:
+                n -= 1
+            i = 0
+            while i < n:
+                __poke8(st + 1600, i, __peek8(start, i) - 48)
+                i += 1
+            __poke(st, 72, n)
+            # t has (end - start) digits; the value is 0.digits * 10^(that - p).
+            return (end - start) - p
+        scale = scale * 10.0
+        p += 1
+    return 1000000
+
+# Formats v into st + 1700 and returns the length.
+fn fmt_float(v: Float) -> Int:
+    st = __state()
+    out = st + 1700
+    bits = __float_bits(v)
+    n = 0
+    if (bits >> 63) != 0:
+        __poke8(out, n, 45)
+        n += 1
+    eb = (bits >> 52) & 2047
+    frac = bits & 4503599627370495
+    if eb == 2047:
+        if frac != 0:
+            __poke8(out, 0, 78)
+            __poke8(out, 1, 97)
+            __poke8(out, 2, 78)
+            return 3
+        __poke8(out, n, 105)
+        __poke8(out, n + 1, 110)
+        __poke8(out, n + 2, 102)
+        return n + 3
+    if eb == 0 and frac == 0:
+        __poke8(out, n, 48)
+        __poke8(out, n + 1, 46)
+        __poke8(out, n + 2, 48)
+        return n + 3
+    a = __fabs(v)
+    k = 1000000
+    if a < 1000000000000000.0:
+        k = float_digits_fast(a)
+    if k == 1000000:
+        k = float_digits_slow(a)
+    nd = __peek(st, 72)
+    digs = st + 1600
+    ex = k - 1
+    if a >= 10000000000000000.0 or a < 0.0001:
+        # Scientific: d[.ddd]e<exp>
+        __poke8(out, n, 48 + __peek8(digs, 0))
+        n += 1
+        if nd > 1:
+            __poke8(out, n, 46)
+            n += 1
+            i = 1
+            while i < nd:
+                __poke8(out, n, 48 + __peek8(digs, i))
+                n += 1
+                i += 1
+        __poke8(out, n, 101)
+        n += 1
+        tmp = st + 1500
+        start = fmt_int(ex, tmp)
+        mem_copy(out + n, start, tmp - start)
+        return n + (tmp - start)
+    if ex >= 0:
+        i = 0
+        while i <= ex:
+            d = 48
+            if i < nd:
+                d = 48 + __peek8(digs, i)
+            __poke8(out, n, d)
+            n += 1
+            i += 1
+        __poke8(out, n, 46)
+        n += 1
+        if nd > ex + 1:
+            i = ex + 1
+            while i < nd:
+                __poke8(out, n, 48 + __peek8(digs, i))
+                n += 1
+                i += 1
+        else:
+            __poke8(out, n, 48)
+            n += 1
+        return n
+    __poke8(out, n, 48)
+    __poke8(out, n + 1, 46)
+    n += 2
+    i = 0
+    while i < 0 - ex - 1:
+        __poke8(out, n, 48)
+        n += 1
+        i += 1
+    i = 0
+    while i < nd:
+        __poke8(out, n, 48 + __peek8(digs, i))
+        n += 1
+        i += 1
+    return n
+
+fn fl_print_float(v: Float):
+    n = fmt_float(v)
+    out_bytes(__state() + 1700, n)
+
+fn fl_str_from_float(v: Float) -> Int:
+    n = fmt_float(v)
+    return str_new(__state() + 1700, n)
+
+# ------------------------------------------------------------------ parsing
+fn pow10_exact(q: Int) -> Float:
+    r = 1.0
+    i = 0
+    while i < q:
+        r = r * 10.0
+        i += 1
+    return r
+
+fn bn_low_u64(b: Int) -> Int:
+    n = __peek(b, 0)
+    r = 0
+    if n >= 1:
+        r = __peek(b, 8)
+    if n >= 2:
+        r = r | (__peek(b, 16) << 32)
+    return r
+
+# Are any of the lowest `count` bits of b set?
+fn bn_low_bits_nonzero(b: Int, count: Int) -> Bool:
+    n = __peek(b, 0)
+    i = 1
+    while i <= n and (i - 1) * 32 < count:
+        limb = __peek(b, i * 8)
+        have = count - (i - 1) * 32
+        if have < 32:
+            limb = limb & ((1 << have) - 1)
+        if limb != 0:
+            return True
+        i += 1
+    return False
+
+# The bits of b above position `sh` (the value must have fewer than 63 bits left).
+fn bn_top_bits(b: Int, sh: Int) -> Int:
+    n = __peek(b, 0)
+    total = bn_bitlen(b)
+    r = 0
+    pos = total - 1
+    while pos >= sh:
+        limb = __peek(b, (pos / 32 + 1) * 8)
+        r = (r << 1) | ((limb >> (pos % 32)) & 1)
+        pos -= 1
+    return r
+
+# floor(r / s) for a quotient below 2^63; the remainder is left in r.
+fn bn_div_bits(r: Int, s: Int) -> Int:
+    shifted = bn(5)
+    bn_copy(shifted, s)
+    bn_shl(shifted, 62)
+    q = 0
+    i = 62
+    while i >= 0:
+        if bn_cmp(r, shifted) >= 0:
+            bn_sub(r, shifted)
+            q = q | (1 << i)
+        bn_shr1(shifted)
+        i -= 1
+    return q
+
+# Bits of the Float (mant + tail) * 2^e2, where mant < 2^63 and `sticky` says that a nonzero tail
+# below the last bit of mant was dropped; rounds to nearest, ties to even.
+fn assemble_double(mant: Int, e2: Int, sticky: Bool) -> Int:
+    if mant == 0:
+        return 0
+    l = bits32(mant >> 32) + 32
+    if (mant >> 32) == 0:
+        l = bits32(mant)
+    drop = l - 53
+    if -1074 - e2 > drop:
+        drop = -1074 - e2
+    m = mant
+    if drop > 0:
+        if drop >= 64:
+            return 0
+        rem = mant & ((1 << drop) - 1)
+        half = 1 << (drop - 1)
+        m = mant >> drop
+        up = rem > half or (rem == half and (sticky or (m & 1) == 1))
+        if up:
+            m += 1
+    else:
+        m = mant << (0 - drop)
+    u = e2 + drop
+    if m >= 9007199254740992:
+        m = m >> 1
+        u += 1
+    if m < 4503599627370496:
+        return m
+    biased = u + 1075
+    if biased >= 2047:
+        return 9218868437227405312
+    return (biased << 52) | (m - 4503599627370496)
+
+# Float bits of mant * 10^q (plus a nonzero tail below mant when sticky), correctly rounded.
+fn decimal_to_bits(mant: u64, q: Int, sticky: Bool) -> Int:
+    if q > 400:
+        return 9218868437227405312
+    if q < -800:
+        return 0
+    if not sticky and mant < 9007199254740992:
+        m = float(mant)
+        if q >= 0 and q <= 22:
+            return __float_bits(m * pow10_exact(q))
+        if q < 0 and q >= -22:
+            return __float_bits(m / pow10_exact(0 - q))
+    r = bn(0)
+    s = bn(1)
+    bn_set(r, mant)
+    if q >= 0:
+        bn_mul_pow10(r, q)
+        l = bn_bitlen(r)
+        if l > 1100:
+            return 9218868437227405312
+        if l <= 62:
+            return assemble_double(bn_low_u64(r), 0, sticky)
+        sh = l - 62
+        tail = sticky or bn_low_bits_nonzero(r, sh)
+        return assemble_double(bn_top_bits(r, sh), sh, tail)
+    bn_set(s, u64(1))
+    bn_mul_pow10(s, 0 - q)
+    # Scale so that the quotient has about 62 bits: mant / 10^-q = quotient * 2^-t.
+    t = 62 - (bn_bitlen(r) - bn_bitlen(s))
+    if t >= 0:
+        bn_shl(r, t)
+    else:
+        bn_shl(s, 0 - t)
+    quotient = bn_div_bits(r, s)
+    tail = sticky or not bn_is_zero(r)
+    return assemble_double(quotient, 0 - t, tail)
+
+fn ascii_lower(c: Int) -> Int:
+    return to_lower_byte(c)
+
+# Does the text at p (length m) equal the lower-case word `word` ignoring case?
+fn eq_word_nocase(p: Int, m: Int, word: Int) -> Bool:
+    if m != __peek(word, 0):
+        return False
+    i = 0
+    while i < m:
+        if ascii_lower(__peek8(p, i)) != __peek8(word + 16, i):
+            return False
+        i += 1
+    return True
+
+fn fl_parse_float(s: Int) -> Int:
+    n = __peek(s, 0)
+    r = trim_range(s + 16, n)
+    p = s + 16 + (r >> 32)
+    m = r & 4294967295
+    i = 0
+    neg = False
+    if m > 0:
+        c = __peek8(p, 0)
+        if c == 45:
+            neg = True
+            i = 1
+        elif c == 43:
+            i = 1
+    if i >= m:
+        return not_valid(s, __str("Float"))
+    sign = 0
+    if neg:
+        sign = -9223372036854775808
+    rest = m - i
+    if eq_word_nocase(p + i, rest, __str("inf")) or eq_word_nocase(p + i, rest, __str("infinity")):
+        return res_ok(sign | 9218868437227405312)
+    if eq_word_nocase(p + i, rest, __str("nan")):
+        return res_ok(9221120237041090560)
+    # digits [. digits] [e [sign] digits]
+    mant: u64 = 0
+    used = 0
+    dropped = 0
+    sticky = False
+    frac_digits = 0
+    seen_digit = False
+    seen_dot = False
+    while i < m:
+        c = __peek8(p, i)
+        if c >= 48 and c <= 57:
+            seen_digit = True
+            d = c - 48
+            if used < 19:
+                mant = mant * 10 + u64(d)
+                if mant != 0:
+                    used += 1
+                if seen_dot:
+                    frac_digits += 1
+            else:
+                if d != 0:
+                    sticky = True
+                if not seen_dot:
+                    dropped += 1
+            i += 1
+        elif c == 46 and not seen_dot:
+            seen_dot = True
+            i += 1
+        else:
+            break
+    if not seen_digit:
+        return not_valid(s, __str("Float"))
+    exp10 = 0
+    if i < m:
+        c = __peek8(p, i)
+        if c != 101 and c != 69:
+            return not_valid(s, __str("Float"))
+        i += 1
+        eneg = False
+        if i < m:
+            c = __peek8(p, i)
+            if c == 45:
+                eneg = True
+                i += 1
+            elif c == 43:
+                i += 1
+        if i >= m:
+            return not_valid(s, __str("Float"))
+        while i < m:
+            c = __peek8(p, i)
+            if c < 48 or c > 57:
+                return not_valid(s, __str("Float"))
+            if exp10 < 100000:
+                exp10 = exp10 * 10 + (c - 48)
+            i += 1
+        if eneg:
+            exp10 = 0 - exp10
+    q = exp10 - frac_digits + dropped
+    bits = 0
+    if mant != 0:
+        bits = decimal_to_bits(mant, q, sticky)
+    return res_ok(sign | bits)

@@ -1,0 +1,446 @@
+# Flash runtime library, part 2: strings, lists, printing, Results, integer parsing.
+
+# ------------------------------------------------------------------ strings
+fn str_new(src: Int, n: Int) -> Int:
+    p = fl_alloc(16 + n)
+    __poke(p, 0, n)
+    __poke(p, 8, n)
+    mem_copy(p + 16, src, n)
+    return p
+
+# A String of n bytes whose contents the caller fills in.
+fn str_alloc(n: Int) -> Int:
+    p = fl_alloc(16 + n)
+    __poke(p, 0, n)
+    __poke(p, 8, n)
+    return p
+
+fn fl_str_drop(p: Int):
+    cap = __peek(p, 8)
+    if cap >= 0:
+        fl_free(p, 16 + cap)
+
+fn fl_str_clone(p: Int) -> Int:
+    return str_new(p + 16, __peek(p, 0))
+
+fn fl_str_concat(a: Int, b: Int) -> Int:
+    na = __peek(a, 0)
+    nb = __peek(b, 0)
+    p = str_alloc(na + nb)
+    mem_copy(p + 16, a + 16, na)
+    mem_copy(p + 16 + na, b + 16, nb)
+    return p
+
+fn fl_str_eq(a: Int, b: Int) -> Bool:
+    n = __peek(a, 0)
+    if n != __peek(b, 0):
+        return False
+    return mem_eq(a + 16, b + 16, n)
+
+fn fl_str_cmp(a: Int, b: Int) -> Int:
+    na = __peek(a, 0)
+    nb = __peek(b, 0)
+    n = na
+    if nb < na:
+        n = nb
+    i = 0
+    while i < n:
+        x = __peek8(a + 16, i)
+        y = __peek8(b + 16, i)
+        if x != y:
+            if x < y:
+                return -1
+            return 1
+        i += 1
+    if na < nb:
+        return -1
+    if na > nb:
+        return 1
+    return 0
+
+fn fl_str_from_int(v: Int) -> Int:
+    end = __state() + 1088
+    start = fmt_int(v, end)
+    return str_new(start, end - start)
+
+fn fl_str_from_uint(v: Int) -> Int:
+    end = __state() + 1088
+    start = fmt_u64(u64(v), end)
+    return str_new(start, end - start)
+
+fn fl_str_from_bool(b: Bool) -> Int:
+    if b:
+        return str_new(__str("True") + 16, 4)
+    return str_new(__str("False") + 16, 5)
+
+fn fl_str_from_none() -> Int:
+    return str_new(__str("None") + 16, 4)
+
+# ------------------------------------------------------------------ printing
+fn fl_print_int(v: Int):
+    end = __state() + 1088
+    start = fmt_int(v, end)
+    out_bytes(start, end - start)
+
+fn fl_print_uint(v: Int):
+    end = __state() + 1088
+    start = fmt_u64(u64(v), end)
+    out_bytes(start, end - start)
+
+fn fl_print_bool(b: Bool):
+    if b:
+        out_bytes(__str("True") + 16, 4)
+    else:
+        out_bytes(__str("False") + 16, 5)
+
+fn fl_print_str(p: Int):
+    out_bytes(p + 16, __peek(p, 0))
+
+fn fl_print_none():
+    out_bytes(__str("None") + 16, 4)
+
+fn fl_print_space():
+    out_bytes(__str(" ") + 16, 1)
+
+fn fl_print_nl():
+    out_bytes(__str("\n") + 16, 1)
+
+# ------------------------------------------------------------------ lists
+fn fl_list_new(cap: Int, stride: Int) -> Int:
+    h = fl_alloc(24)
+    data = 0
+    c = 0
+    if cap > 0:
+        data = fl_alloc(cap * stride)
+        c = cap
+    __poke(h, 0, 0)
+    __poke(h, 8, c)
+    __poke(h, 16, data)
+    return h
+
+fn fl_list_push_slot(l: Int, stride: Int) -> Int:
+    n = __peek(l, 0)
+    cap = __peek(l, 8)
+    data = __peek(l, 16)
+    if n == cap:
+        new_cap = 4
+        if cap != 0:
+            new_cap = cap * 2
+        fresh = fl_alloc(new_cap * stride)
+        if data != 0:
+            mem_copy(fresh, data, n * stride)
+            fl_free(data, cap * stride)
+        data = fresh
+        __poke(l, 16, data)
+        __poke(l, 8, new_cap)
+    __poke(l, 0, n + 1)
+    return data + n * stride
+
+fn fl_list_pop_slot(l: Int, stride: Int) -> Int:
+    n = __peek(l, 0)
+    if n == 0:
+        die_begin()
+        err_str(__str("pop() from an empty list"))
+        die_end()
+    n -= 1
+    __poke(l, 0, n)
+    return __peek(l, 16) + n * stride
+
+fn fl_list_free(l: Int, stride: Int):
+    data = __peek(l, 16)
+    if data != 0:
+        fl_free(data, __peek(l, 8) * stride)
+    fl_free(l, 24)
+
+fn fl_list_clone_shallow(l: Int, stride: Int) -> Int:
+    n = __peek(l, 0)
+    r = fl_list_new(n, stride)
+    if n > 0:
+        mem_copy(__peek(r, 16), __peek(l, 16), n * stride)
+    __poke(r, 0, n)
+    return r
+
+# Appends a String to a list of Strings.
+fn list_push_str(l: Int, s: Int):
+    slot = fl_list_push_slot(l, 8)
+    __poke(slot, 0, s)
+
+# ------------------------------------------------------------------ Results
+# Result: [tag (0 ok, 1 error)][value][error message String]
+fn mk_result(tag: Int, val: Int, err: Int) -> Int:
+    r = fl_alloc(24)
+    __poke(r, 0, tag)
+    __poke(r, 8, val)
+    __poke(r, 16, err)
+    return r
+
+fn res_ok(v: Int) -> Int:
+    return mk_result(0, v, 0)
+
+fn res_err(msg: Int) -> Int:
+    return mk_result(1, 0, msg)
+
+fn fl_result_error(r: Int) -> Int:
+    if __peek(r, 0) == 0:
+        return str_new(__str("") + 16, 0)
+    return fl_str_clone(__peek(r, 16))
+
+# ------------------------------------------------------------------ string library
+fn is_space_byte(c: Int) -> Bool:
+    return c == 32 or (c >= 9 and c <= 13)
+
+fn to_upper_byte(c: Int) -> Int:
+    if c >= 97 and c <= 122:
+        return c - 32
+    return c
+
+fn to_lower_byte(c: Int) -> Int:
+    if c >= 65 and c <= 90:
+        return c + 32
+    return c
+
+fn fl_str_upper(p: Int) -> Int:
+    n = __peek(p, 0)
+    r = str_alloc(n)
+    i = 0
+    while i < n:
+        __poke8(r + 16, i, to_upper_byte(__peek8(p + 16, i)))
+        i += 1
+    return r
+
+fn fl_str_lower(p: Int) -> Int:
+    n = __peek(p, 0)
+    r = str_alloc(n)
+    i = 0
+    while i < n:
+        __poke8(r + 16, i, to_lower_byte(__peek8(p + 16, i)))
+        i += 1
+    return r
+
+# Length in bytes of the Unicode White_Space character that starts at s[i] (0 if none).
+fn space_len_at(s: Int, i: Int, n: Int) -> Int:
+    c = __peek8(s, i)
+    if is_space_byte(c):
+        return 1
+    if c == 194 and i + 1 < n:
+        d = __peek8(s, i + 1)
+        if d == 133 or d == 160:
+            return 2
+        return 0
+    if c == 225 and i + 2 < n:
+        if __peek8(s, i + 1) == 154 and __peek8(s, i + 2) == 128:
+            return 3
+        return 0
+    if c == 226 and i + 2 < n:
+        d = __peek8(s, i + 1)
+        e = __peek8(s, i + 2)
+        if d == 128 and ((e >= 128 and e <= 138) or e == 168 or e == 169 or e == 175):
+            return 3
+        if d == 129 and e == 159:
+            return 3
+        return 0
+    if c == 227 and i + 2 < n:
+        if __peek8(s, i + 1) == 128 and __peek8(s, i + 2) == 128:
+            return 3
+        return 0
+    return 0
+
+# Start of the trimmed text of s (bytes at address s, length n) and its length, packed as start * 2^32 + length.
+fn trim_range(s: Int, n: Int) -> Int:
+    start = 0
+    while start < n:
+        w = space_len_at(s, start, n)
+        if w == 0:
+            break
+        start += w
+    end = n
+    while end > start:
+        # Step back over one (possibly multi-byte) space character.
+        w = 0
+        k = 1
+        while k <= 3 and end - k >= start:
+            if space_len_at(s, end - k, n) == k:
+                w = k
+                break
+            k += 1
+        if w == 0:
+            break
+        end -= w
+    return start * 4294967296 + (end - start)
+
+fn fl_str_trim(p: Int) -> Int:
+    r = trim_range(p + 16, __peek(p, 0))
+    return str_new(p + 16 + (r >> 32), r & 4294967295)
+
+fn fl_str_contains(a: Int, b: Int) -> Bool:
+    return mem_find(a + 16, __peek(a, 0), b + 16, __peek(b, 0)) >= 0
+
+fn fl_str_starts_with(a: Int, b: Int) -> Bool:
+    nb = __peek(b, 0)
+    if nb > __peek(a, 0):
+        return False
+    return mem_eq(a + 16, b + 16, nb)
+
+fn fl_str_ends_with(a: Int, b: Int) -> Bool:
+    na = __peek(a, 0)
+    nb = __peek(b, 0)
+    if nb > na:
+        return False
+    return mem_eq(a + 16 + na - nb, b + 16, nb)
+
+fn fl_str_find(a: Int, b: Int) -> Int:
+    return mem_find(a + 16, __peek(a, 0), b + 16, __peek(b, 0))
+
+fn fl_str_replace(s: Int, from: Int, to: Int) -> Int:
+    ns = __peek(s, 0)
+    nf = __peek(from, 0)
+    nt = __peek(to, 0)
+    if nf == 0:
+        return str_new(s + 16, ns)
+    # First pass: count matches.
+    count = 0
+    i = 0
+    while i < ns:
+        k = mem_find(s + 16 + i, ns - i, from + 16, nf)
+        if k < 0:
+            break
+        count += 1
+        i += k + nf
+    r = str_alloc(ns + count * (nt - nf))
+    out = r + 16
+    i = 0
+    while i < ns:
+        k = mem_find(s + 16 + i, ns - i, from + 16, nf)
+        if k < 0:
+            break
+        mem_copy(out, s + 16 + i, k)
+        out += k
+        mem_copy(out, to + 16, nt)
+        out += nt
+        i += k + nf
+    mem_copy(out, s + 16 + i, ns - i)
+    return r
+
+fn fl_str_split(s: Int, sep: Int) -> Int:
+    ns = __peek(s, 0)
+    nsep = __peek(sep, 0)
+    parts = fl_list_new(4, 8)
+    if nsep == 0:
+        # Split into characters (UTF-8 sequences).
+        i = 0
+        while i < ns:
+            c = __peek8(s + 16, i)
+            w = 1
+            if c >= 240:
+                w = 4
+            elif c >= 224:
+                w = 3
+            elif c >= 192:
+                w = 2
+            if i + w > ns:
+                w = ns - i
+            list_push_str(parts, str_new(s + 16 + i, w))
+            i += w
+        return parts
+    start = 0
+    while True:
+        k = mem_find(s + 16 + start, ns - start, sep + 16, nsep)
+        if k < 0:
+            break
+        list_push_str(parts, str_new(s + 16 + start, k))
+        start += k + nsep
+    list_push_str(parts, str_new(s + 16 + start, ns - start))
+    return parts
+
+fn fl_str_join(l: Int, sep: Int) -> Int:
+    n = __peek(l, 0)
+    data = __peek(l, 16)
+    nsep = __peek(sep, 0)
+    total = 0
+    i = 0
+    while i < n:
+        total += __peek(__peek(data, i * 8), 0)
+        i += 1
+    if n > 1:
+        total += nsep * (n - 1)
+    r = str_alloc(total)
+    out = r + 16
+    i = 0
+    while i < n:
+        if i > 0:
+            mem_copy(out, sep + 16, nsep)
+            out += nsep
+        item = __peek(data + i * 8, 0)
+        m = __peek(item, 0)
+        mem_copy(out, item + 16, m)
+        out += m
+        i += 1
+    return r
+
+fn fl_str_substr(s: Int, start: Int, len: Int) -> Int:
+    n = __peek(s, 0)
+    st = start
+    if st < 0:
+        st = 0
+    if st > n:
+        st = n
+    ln = len
+    if ln < 0:
+        ln = 0
+    if ln > n - st:
+        ln = n - st
+    return str_new(s + 16 + st, ln)
+
+fn fl_str_byte_at(s: Int, i: Int) -> u8:
+    n = __peek(s, 0)
+    if i < 0 or i >= n:
+        die_begin()
+        err_str(__str("byte_at index "))
+        err_int(i)
+        err_str(__str(" is out of range for a string of length "))
+        err_int(n)
+        die_end()
+    return u8(__peek8(s + 16, i))
+
+# ------------------------------------------------------------------ parsing
+fn not_valid(s: Int, what: Int) -> Int:
+    a = fl_str_concat(__str("'"), s)
+    b = fl_str_concat(a, __str("' is not a valid "))
+    fl_str_drop(a)
+    c = fl_str_concat(b, what)
+    fl_str_drop(b)
+    return res_err(c)
+
+fn fl_parse_int(s: Int) -> Int:
+    n = __peek(s, 0)
+    r = trim_range(s + 16, n)
+    p = s + 16 + (r >> 32)
+    m = r & 4294967295
+    i = 0
+    neg = False
+    if m > 0:
+        c = __peek8(p, 0)
+        if c == 45:
+            neg = True
+            i = 1
+        elif c == 43:
+            i = 1
+    if i >= m:
+        return not_valid(s, __str("Int"))
+    limit: u64 = 9223372036854775807
+    if neg:
+        limit = 9223372036854775808
+    acc: u64 = 0
+    while i < m:
+        c = __peek8(p, i)
+        if c < 48 or c > 57:
+            return not_valid(s, __str("Int"))
+        d: u64 = u64(c - 48)
+        if acc > (limit - d) / 10:
+            return not_valid(s, __str("Int"))
+        acc = acc * 10 + d
+        i += 1
+    v = int(acc)
+    if neg:
+        v = 0 - v
+    return res_ok(v)

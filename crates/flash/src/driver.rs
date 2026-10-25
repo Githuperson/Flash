@@ -71,6 +71,7 @@ struct Loader {
     by_path: HashMap<PathBuf, usize>,
     plugins: Vec<PluginBinding>,
     in_progress: Vec<PathBuf>,
+    privileged: bool,
 }
 
 impl Loader {
@@ -111,7 +112,7 @@ impl Loader {
         let file = self.sources.add(canon.clone(), display.trim_start_matches("./").to_string(), text.clone());
         let ast = crate::parser::parse_module(&text, file, &mut self.diags);
         let idx = self.mods.len();
-        self.mods.push(LoadedModule { alias, ast, imports: vec![], plugins: vec![] });
+        self.mods.push(LoadedModule { alias, ast, imports: vec![], plugins: vec![], privileged: self.privileged });
         self.by_path.insert(canon.clone(), idx);
         self.in_progress.push(canon.clone());
         let dir = path.parent().map(|p| p.to_path_buf()).unwrap_or_default();
@@ -205,16 +206,21 @@ impl Loader {
 
 /// Run all front-end stages. On failure returns the fully rendered diagnostics.
 pub fn frontend(path: &Path, suffix: Option<&str>) -> Result<Frontend, String> {
-    frontend_impl(path, None, suffix)
+    frontend_impl(path, None, suffix, false)
+}
+
+/// Front end for the runtime library: like `frontend_from_source`, but the `__` intrinsics are allowed.
+pub fn frontend_runtime(name: &str, text: &str) -> Result<Frontend, String> {
+    frontend_impl(Path::new(name), Some(text.to_string()), None, true)
 }
 
 /// Front end for source text that is not stored in a file (used by tests and tools).
 /// `name` is shown in diagnostics; imports resolve relative to the current directory.
 pub fn frontend_from_source(name: &str, text: &str) -> Result<Frontend, String> {
-    frontend_impl(Path::new(name), Some(text.to_string()), None)
+    frontend_impl(Path::new(name), Some(text.to_string()), None, false)
 }
 
-fn frontend_impl(path: &Path, text: Option<String>, suffix: Option<&str>) -> Result<Frontend, String> {
+fn frontend_impl(path: &Path, text: Option<String>, suffix: Option<&str>, privileged: bool) -> Result<Frontend, String> {
     let mut l = Loader {
         sources: SourceMap::default(),
         diags: Diagnostics::default(),
@@ -222,6 +228,7 @@ fn frontend_impl(path: &Path, text: Option<String>, suffix: Option<&str>) -> Res
         by_path: HashMap::new(),
         plugins: vec![],
         in_progress: vec![],
+        privileged,
     };
     let alias = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
     match text {
@@ -508,12 +515,27 @@ fn cache_key(fe: &Frontend, opts: &BuildOptions) -> String {
     h.finalize().iter().map(|b| format!("{:02x}", b)).collect()
 }
 
-/// Turn `Backend::Auto` into a concrete backend: LLVM for host release builds when clang exists.
-fn resolve_backend(opts: &BuildOptions) -> crate::codegen::Backend {
+/// Turn `Backend::Auto` into a concrete backend. Flash's own native back end is used whenever it
+/// can handle the program (Linux x86-64 host, no C libraries, no plugins); otherwise the optional
+/// legacy back ends are used: LLVM for release builds when clang exists, else Cranelift.
+fn resolve_backend(opts: &BuildOptions, program: &Program) -> crate::codegen::Backend {
     use crate::codegen::Backend;
     match opts.backend {
-        Backend::Auto if opts.release && opts.target.is_none() && crate::llvm::find_clang().is_some() => Backend::Llvm,
-        Backend::Auto => Backend::Cranelift,
+        Backend::Auto => {
+            let native_ok = cfg!(all(target_os = "linux", target_arch = "x86_64"))
+                && opts.target.is_none()
+                && opts.linker == Linker::Auto
+                && opts.link_args.is_empty()
+                && program.externs.is_empty()
+                && program.plugins.is_empty();
+            if native_ok {
+                Backend::Native
+            } else if opts.release && opts.target.is_none() && crate::llvm::find_clang().is_some() {
+                Backend::Llvm
+            } else {
+                Backend::Cranelift
+            }
+        }
         b => b,
     }
 }
@@ -521,10 +543,10 @@ fn resolve_backend(opts: &BuildOptions) -> crate::codegen::Backend {
 /// Compile `src` into a native executable at the returned path.
 pub fn build(src: &Path, opts: &BuildOptions) -> Result<(PathBuf, BuildTimings), String> {
     let t0 = std::time::Instant::now();
-    let mut resolved = opts.clone();
-    resolved.backend = resolve_backend(opts);
-    let opts = &resolved;
     let fe = frontend(src, opts.source_suffix.as_deref())?;
+    let mut resolved = opts.clone();
+    resolved.backend = resolve_backend(opts, &fe.program);
+    let opts = &resolved;
     // Build cache: a hit skips lowering, code generation and linking.
     let cache_entry =
         if opts.no_cache || opts.emit_ir || opts.emit_obj_only { None } else { cache_dir().map(|d| d.join(cache_key(&fe, opts))) };
@@ -534,6 +556,9 @@ pub fn build(src: &Path, opts: &BuildOptions) -> Result<(PathBuf, BuildTimings),
             let t = t0.elapsed();
             return Ok((out, BuildTimings { frontend: t, backend: Default::default(), link: Default::default(), cached: true }));
         }
+    }
+    if opts.backend == crate::codegen::Backend::Native && !opts.emit_ir && !opts.emit_obj_only {
+        return build_native(&fe, opts, &out, cache_entry.as_deref(), t0);
     }
     let module = lower_and_optimise(&fe.program, opts.release);
     if opts.emit_ir {
@@ -590,6 +615,47 @@ pub fn build(src: &Path, opts: &BuildOptions) -> Result<(PathBuf, BuildTimings),
         }
     }
     Ok((out, BuildTimings { frontend: t1 - t0, backend: t2 - t1, link: t3 - t2, cached: false }))
+}
+
+/// Build with Flash's own back end: lower, link with the Flash-language runtime, emit an ELF file.
+fn build_native(
+    fe: &Frontend,
+    opts: &BuildOptions,
+    out: &Path,
+    cache_entry: Option<&Path>,
+    t0: std::time::Instant,
+) -> Result<(PathBuf, BuildTimings), String> {
+    if !cfg!(all(target_os = "linux", target_arch = "x86_64")) || opts.target.is_some() {
+        return Err("the native back end supports Linux x86-64 only; use --backend cranelift for other targets\n".into());
+    }
+    if !fe.program.externs.is_empty() || !fe.program.plugins.is_empty() || !opts.link_args.is_empty() {
+        return Err("the native back end cannot link C libraries or plugins; use --backend cranelift or llvm for `extern fn`, --link and plugins\n".into());
+    }
+    let user = crate::lower::lower(&fe.program);
+    let rt = crate::native::link::lower_runtime().map_err(|e| format!("internal error in the runtime library:\n{}", e))?;
+    let t1 = std::time::Instant::now();
+    let module = crate::native::link::link(user, rt, opts.release).map_err(|e| format!("{}\n", e))?;
+    let elf = crate::native::compile(&module).map_err(|e| format!("{}\n", e))?;
+    let t2 = std::time::Instant::now();
+    std::fs::write(out, &elf).map_err(|e| format!("cannot write {}: {}", out.display(), e))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(out, std::fs::Permissions::from_mode(0o755)).map_err(|e| format!("cannot mark {} executable: {}", out.display(), e))?;
+    }
+    if let Some(entry) = cache_entry {
+        if let Some(parent) = entry.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let tmp = entry.with_extension(format!("tmp{}", std::process::id()));
+        if std::fs::copy(out, &tmp).is_ok() && std::fs::rename(&tmp, entry).is_err() {
+            let _ = std::fs::remove_file(&tmp);
+        }
+        if let Some(dir) = entry.parent() {
+            prune_cache(dir, 64);
+        }
+    }
+    Ok((out.to_path_buf(), BuildTimings { frontend: t1 - t0, backend: t2 - t1, link: Default::default(), cached: false }))
 }
 
 /// Type-check only.

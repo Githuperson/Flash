@@ -112,6 +112,9 @@ pub enum Callee {
     Func(FuncRef),
     Extern(ExternRef),
     Indirect(VReg),
+    /// A Linux system call (native back end only); `args[0]` is the call number, followed by up
+    /// to six arguments. Used by the runtime library written in Flash.
+    Syscall,
 }
 
 #[derive(Clone, Debug)]

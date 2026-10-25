@@ -1,0 +1,322 @@
+# Flash runtime library, part 5: process arguments, environment, time, standard input, files, paths.
+
+# ------------------------------------------------------------------ arguments and environment
+fn fl_args() -> Int:
+    st = __state()
+    sp = __peek(st, 0)
+    argc = __peek(sp, 0)
+    l = fl_list_new(argc, 8)
+    i = 1
+    while i < argc:
+        a = __peek(sp + 8, i * 8)
+        list_push_str(l, str_new(a, cstr_len(a)))
+        i += 1
+    return l
+
+fn cstr_len(p: Int) -> Int:
+    n = 0
+    while __peek8(p, n) != 0:
+        n += 1
+    return n
+
+# Pointer to the value of the environment variable called `name` (a String), or 0.
+fn env_lookup(name: Int) -> Int:
+    st = __state()
+    sp = __peek(st, 0)
+    argc = __peek(sp, 0)
+    envp = sp + 8 * (argc + 2)
+    nn = __peek(name, 0)
+    i = 0
+    while True:
+        e = __peek(envp, i * 8)
+        if e == 0:
+            return 0
+        if mem_eq(e, name + 16, nn) and __peek8(e, nn) == 61:
+            return e + nn + 1
+        i += 1
+
+fn fl_env_var(name: Int) -> Int:
+    v = env_lookup(name)
+    if v == 0:
+        a = fl_str_concat(__str("the environment variable '"), name)
+        b = fl_str_concat(a, __str("' is not set"))
+        fl_str_drop(a)
+        return res_err(b)
+    return res_ok(str_new(v, cstr_len(v)))
+
+# ------------------------------------------------------------------ time
+fn fl_now_ns() -> Int:
+    st = __state()
+    ts = st + 1500
+    __syscall(228, 1, ts, 0, 0, 0, 0)
+    now = __peek(ts, 0) * 1000000000 + __peek(ts, 8)
+    start = __peek(st, 64)
+    if start == 0:
+        __poke(st, 64, now)
+        return 0
+    return now - start
+
+fn fl_sleep_ms(ms: Int):
+    out_flush()
+    if ms <= 0:
+        return
+    ts = __state() + 1500
+    __poke(ts, 0, ms / 1000)
+    __poke(ts, 8, (ms % 1000) * 1000000)
+    __syscall(35, ts, 0, 0, 0, 0, 0)
+
+# ------------------------------------------------------------------ standard input
+fn fl_read_line() -> Int:
+    out_flush()
+    st = __state()
+    buf = st + 40960
+    cap = 256
+    data = fl_alloc(cap)
+    n = 0
+    while True:
+        pos = __peek(st, 48)
+        avail = __peek(st, 56)
+        if pos >= avail:
+            r = __syscall(0, 0, buf, 16384, 0, 0, 0)
+            if r == -4:
+                continue
+            if r <= 0:
+                break
+            __poke(st, 48, 0)
+            __poke(st, 56, r)
+            pos = 0
+            avail = r
+        c = __peek8(buf, pos)
+        __poke(st, 48, pos + 1)
+        if c == 10:
+            break
+        if n == cap:
+            fresh = fl_alloc(cap * 2)
+            mem_copy(fresh, data, n)
+            fl_free(data, cap)
+            data = fresh
+            cap = cap * 2
+        __poke8(data, n, c)
+        n += 1
+    if n > 0 and __peek8(data, n - 1) == 13:
+        n -= 1
+    s = str_new(data, n)
+    fl_free(data, cap)
+    return s
+
+# ------------------------------------------------------------------ files
+# Copies a String into the scratch area as a NUL-terminated C string and returns its address.
+fn cpath(p: Int) -> Int:
+    buf = __state() + 1024
+    n = __peek(p, 0)
+    if n > 2000:
+        n = 2000
+    mem_copy(buf, p + 16, n)
+    __poke8(buf, n, 0)
+    return buf
+
+fn errno_text(e: Int) -> Int:
+    if e == 1:
+        return __str("Operation not permitted")
+    if e == 5:
+        return __str("Input/output error")
+    if e == 9:
+        return __str("Bad file descriptor")
+    if e == 12:
+        return __str("Cannot allocate memory")
+    if e == 16:
+        return __str("Device or resource busy")
+    if e == 20:
+        return __str("Not a directory")
+    if e == 21:
+        return __str("Is a directory")
+    if e == 22:
+        return __str("Invalid argument")
+    if e == 24:
+        return __str("Too many open files")
+    if e == 26:
+        return __str("Text file busy")
+    if e == 27:
+        return __str("File too large")
+    if e == 28:
+        return __str("No space left on device")
+    if e == 30:
+        return __str("Read-only file system")
+    if e == 36:
+        return __str("File name too long")
+    if e == 39:
+        return __str("Directory not empty")
+    if e == 40:
+        return __str("Too many levels of symbolic links")
+    return __str("Unknown error")
+
+fn cat_free(a: Int, b: Int) -> Int:
+    r = fl_str_concat(a, b)
+    fl_str_drop(a)
+    return r
+
+# The error Result "cannot <what> '<path>': <why>".
+fn io_error(what: Int, path: Int, e: Int) -> Int:
+    m = fl_str_concat(__str("cannot "), what)
+    m = cat_free(m, __str(" '"))
+    m = cat_free(m, path)
+    m = cat_free(m, __str("': "))
+    if e == 2:
+        m = cat_free(m, __str("the file does not exist"))
+    elif e == 13:
+        m = cat_free(m, __str("permission denied"))
+    elif e == 17:
+        m = cat_free(m, __str("it already exists"))
+    else:
+        m = cat_free(m, errno_text(e))
+        m = cat_free(m, __str(" (os error "))
+        num = fl_str_from_int(e)
+        m = cat_free(m, num)
+        fl_str_drop(num)
+        m = cat_free(m, __str(")"))
+    return res_err(m)
+
+fn fl_read_file(path: Int) -> Int:
+    fd = __syscall(2, cpath(path), 0, 0, 0, 0, 0)
+    if fd < 0:
+        return io_error(__str("read"), path, 0 - fd)
+    cap = 4096
+    data = fl_alloc(cap)
+    n = 0
+    while True:
+        if n == cap:
+            fresh = fl_alloc(cap * 2)
+            mem_copy(fresh, data, n)
+            fl_free(data, cap)
+            data = fresh
+            cap = cap * 2
+        r = __syscall(0, fd, data + n, cap - n, 0, 0, 0)
+        if r == -4:
+            continue
+        if r < 0:
+            __syscall(3, fd, 0, 0, 0, 0, 0)
+            fl_free(data, cap)
+            return io_error(__str("read"), path, 0 - r)
+        if r == 0:
+            break
+        n += r
+    __syscall(3, fd, 0, 0, 0, 0, 0)
+    s = str_new(data, n)
+    fl_free(data, cap)
+    return res_ok(s)
+
+# Writes all of text to the file; flags are the open(2) flags.
+fn write_to_file(path: Int, text: Int, flags: Int, what: Int) -> Int:
+    fd = __syscall(2, cpath(path), flags, 438, 0, 0, 0)
+    if fd < 0:
+        return io_error(what, path, 0 - fd)
+    n = __peek(text, 0)
+    done = 0
+    while done < n:
+        r = __syscall(1, fd, text + 16 + done, n - done, 0, 0, 0)
+        if r == -4:
+            continue
+        if r <= 0:
+            __syscall(3, fd, 0, 0, 0, 0, 0)
+            e = 0 - r
+            if r == 0:
+                e = 5
+            return io_error(what, path, e)
+        done += r
+    __syscall(3, fd, 0, 0, 0, 0, 0)
+    return res_ok(0)
+
+fn fl_write_file(path: Int, text: Int) -> Int:
+    # O_WRONLY | O_CREAT | O_TRUNC
+    return write_to_file(path, text, 577, __str("write"))
+
+fn fl_append_file(path: Int, text: Int) -> Int:
+    # O_WRONLY | O_CREAT | O_APPEND
+    return write_to_file(path, text, 1089, __str("append to"))
+
+fn fl_file_exists(path: Int) -> Bool:
+    return __syscall(21, cpath(path), 0, 0, 0, 0, 0) == 0
+
+fn fl_remove_file(path: Int) -> Int:
+    r = __syscall(87, cpath(path), 0, 0, 0, 0, 0)
+    if r < 0:
+        return io_error(__str("remove"), path, 0 - r)
+    return res_ok(0)
+
+# ------------------------------------------------------------------ paths
+fn fl_path_join(a: Int, b: Int) -> Int:
+    na = __peek(a, 0)
+    nb = __peek(b, 0)
+    if nb > 0 and __peek8(b + 16, 0) == 47:
+        return str_new(b + 16, nb)
+    if na == 0:
+        return str_new(b + 16, nb)
+    sep = 1
+    if __peek8(a + 16, na - 1) == 47:
+        sep = 0
+    r = str_alloc(na + sep + nb)
+    mem_copy(r + 16, a + 16, na)
+    if sep == 1:
+        __poke8(r + 16, na, 47)
+    mem_copy(r + 16 + na + sep, b + 16, nb)
+    return r
+
+# Finds the last path component (ignoring empty and "." components). Stores its start offset at
+# state + 80 and its end offset (exclusive) at state + 88; returns False if there is none.
+fn last_component(p: Int) -> Bool:
+    st = __state()
+    n = __peek(p, 0)
+    end = n
+    while end > 0:
+        while end > 0 and __peek8(p + 16, end - 1) == 47:
+            end -= 1
+        start = end
+        while start > 0 and __peek8(p + 16, start - 1) != 47:
+            start -= 1
+        if end - start == 1 and __peek8(p + 16, start) == 46:
+            end = start
+            continue
+        if end == start:
+            return False
+        __poke(st, 80, start)
+        __poke(st, 88, end)
+        return True
+    return False
+
+fn fl_path_filename(p: Int) -> Int:
+    st = __state()
+    if not last_component(p):
+        return str_new(__str("") + 16, 0)
+    s = __peek(st, 80)
+    e = __peek(st, 88)
+    if e - s == 2 and __peek8(p + 16, s) == 46 and __peek8(p + 16, s + 1) == 46:
+        return str_new(__str("") + 16, 0)
+    return str_new(p + 16 + s, e - s)
+
+fn fl_path_parent(p: Int) -> Int:
+    st = __state()
+    if not last_component(p):
+        return str_new(__str("") + 16, 0)
+    s = __peek(st, 80)
+    # Everything before the last component, without trailing separators (but keep a lone root).
+    end = s
+    while end > 1 and __peek8(p + 16, end - 1) == 47:
+        end -= 1
+    if end == 1 and __peek8(p + 16, 0) != 47:
+        end = 1
+    return str_new(p + 16, end)
+
+fn fl_path_ext(p: Int) -> Int:
+    st = __state()
+    if not last_component(p):
+        return str_new(__str("") + 16, 0)
+    s = __peek(st, 80)
+    e = __peek(st, 88)
+    if e - s == 2 and __peek8(p + 16, s) == 46 and __peek8(p + 16, s + 1) == 46:
+        return str_new(__str("") + 16, 0)
+    i = e - 1
+    while i > s and __peek8(p + 16, i) != 46:
+        i -= 1
+    if i <= s:
+        return str_new(__str("") + 16, 0)
+    return str_new(p + 16 + i + 1, e - i - 1)

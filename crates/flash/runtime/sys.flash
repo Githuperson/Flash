@@ -1,0 +1,263 @@
+# Flash runtime library, part 1: system calls, memory, output, process control.
+#
+# This file is compiled together with every program by the native back end. It uses the
+# `__` intrinsics (raw memory access and Linux system calls), which only runtime code may use,
+# so a Flash executable needs no C library and no other runtime.
+#
+# Global state lives in one block returned by __state() (all offsets are bytes):
+#     0  initial stack pointer (argc, argv, envp)
+#    16  bytes waiting in the output buffer
+#    24  number of live fl_alloc blocks
+#    32  bump pointer of the current memory chunk
+#    40  end of the current memory chunk
+#    48  stdin buffer: read position        56  stdin buffer: bytes available
+#    64  start time of the program (ns), 0 = not taken yet
+#   128  heads of the free lists, one per size class (8 bytes each, classes 1..74)
+#  1024  scratch area (2048 bytes) for number formatting and C paths
+#  3072  scratch area for big numbers (floats), 8192 bytes
+#  8192  output buffer (32768 bytes)
+# 40960  stdin buffer (16384 bytes)
+# Strings are [len][cap][bytes]; cap == -1 marks static data. Lists are [len][cap][data pointer].
+
+extern fn flash_main()
+
+# ------------------------------------------------------------------ system calls
+fn sys_write_all(fd: Int, buf: Int, n: Int):
+    done = 0
+    while done < n:
+        r = __syscall(1, fd, buf + done, n - done, 0, 0, 0)
+        if r == -4:
+            continue
+        if r <= 0:
+            return
+        done += r
+
+fn sys_exit(code: Int):
+    __syscall(231, code, 0, 0, 0, 0, 0)
+
+fn sys_mmap(n: Int) -> Int:
+    # mmap(NULL, n, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0)
+    r = __syscall(9, 0, n, 3, 34, -1, 0)
+    if r < 0 and r > -4096:
+        return 0
+    return r
+
+# ------------------------------------------------------------------ raw memory
+fn mem_copy(dst: Int, src: Int, n: Int):
+    i = 0
+    while i + 8 <= n:
+        __poke(dst + i, 0, __peek(src + i, 0))
+        i += 8
+    while i < n:
+        __poke8(dst + i, 0, __peek8(src + i, 0))
+        i += 1
+
+fn mem_eq(a: Int, b: Int, n: Int) -> Bool:
+    i = 0
+    while i + 8 <= n:
+        if __peek(a + i, 0) != __peek(b + i, 0):
+            return False
+        i += 8
+    while i < n:
+        if __peek8(a + i, 0) != __peek8(b + i, 0):
+            return False
+        i += 1
+    return True
+
+# Index of the first occurrence of needle (nn bytes) in hay (hn bytes), or -1.
+fn mem_find(hay: Int, hn: Int, needle: Int, nn: Int) -> Int:
+    if nn == 0:
+        return 0
+    if nn > hn:
+        return -1
+    first = __peek8(needle, 0)
+    last = hn - nn
+    i = 0
+    while i <= last:
+        if __peek8(hay + i, 0) == first:
+            if mem_eq(hay + i, needle, nn):
+                return i
+        i += 1
+    return -1
+
+# ------------------------------------------------------------------ output
+fn out_flush():
+    st = __state()
+    n = __peek(st, 16)
+    if n > 0:
+        __poke(st, 16, 0)
+        sys_write_all(1, st + 8192, n)
+
+fn out_bytes(p: Int, n: Int):
+    st = __state()
+    used = __peek(st, 16)
+    if used + n > 32768:
+        out_flush()
+        used = 0
+        if n > 32768:
+            sys_write_all(1, p, n)
+            return
+    mem_copy(st + 8192 + used, p, n)
+    __poke(st, 16, used + n)
+
+# Writes a Flash String object / an integer to standard error.
+fn err_str(s: Int):
+    sys_write_all(2, s + 16, __peek(s, 0))
+
+fn err_int(v: Int):
+    end = __state() + 1088
+    start = fmt_int(v, end)
+    sys_write_all(2, start, end - start)
+
+# Writes the decimal digits of v ending at address `end`; returns the address of the first digit.
+fn fmt_u64(v: u64, end: Int) -> Int:
+    p = end
+    x = v
+    while True:
+        p -= 1
+        __poke8(p, 0, 48 + int(x % 10))
+        x = x / 10
+        if x == 0:
+            break
+    return p
+
+fn fmt_int(v: Int, end: Int) -> Int:
+    x: u64 = u64(v)
+    if v < 0:
+        x = u64(0) - x
+    p = fmt_u64(x, end)
+    if v < 0:
+        p -= 1
+        __poke8(p, 0, 45)
+    return p
+
+# ------------------------------------------------------------------ memory allocator
+# Size classes: 16-byte steps up to 1 KiB (classes 1..64), then powers of two up to 1 MiB
+# (classes 65..74). Freed blocks go to a per-class free list (the caller passes the size back, so
+# blocks need no header). Larger blocks are mapped and unmapped directly.
+fn size_class(n: Int) -> Int:
+    if n <= 16:
+        return 1
+    if n <= 1024:
+        return (n + 15) >> 4
+    if n > 1048576:
+        return 0
+    c = 65
+    sz = 2048
+    while sz < n:
+        sz = sz * 2
+        c += 1
+    return c
+
+fn class_size(c: Int) -> Int:
+    if c <= 64:
+        return c << 4
+    return 1024 << (c - 64)
+
+fn round_page(n: Int) -> Int:
+    return (n + 4095) & -4096
+
+fn out_of_memory():
+    out_flush()
+    err_str(__str("Flash runtime error: out of memory\n"))
+    sys_exit(101)
+
+fn fl_alloc(size: Int) -> Int:
+    st = __state()
+    __poke(st, 24, __peek(st, 24) + 1)
+    c = size_class(size)
+    if c == 0:
+        p = sys_mmap(round_page(size))
+        if p == 0:
+            out_of_memory()
+        return p
+    head = st + 128 + c * 8
+    p = __peek(head, 0)
+    if p != 0:
+        __poke(head, 0, __peek(p, 0))
+        return p
+    sz = class_size(c)
+    bump = __peek(st, 32)
+    if bump + sz > __peek(st, 40):
+        chunk = 4194304
+        bump = sys_mmap(chunk)
+        if bump == 0:
+            out_of_memory()
+        __poke(st, 40, bump + chunk)
+    __poke(st, 32, bump + sz)
+    return bump
+
+fn fl_free(p: Int, size: Int):
+    if p == 0:
+        return
+    st = __state()
+    __poke(st, 24, __peek(st, 24) - 1)
+    c = size_class(size)
+    if c == 0:
+        __syscall(11, p, round_page(size), 0, 0, 0, 0)
+        return
+    head = st + 128 + c * 8
+    __poke(p, 0, __peek(head, 0))
+    __poke(head, 0, p)
+
+# ------------------------------------------------------------------ errors and exit
+fn fl_exit(code: Int):
+    out_flush()
+    sys_exit(code)
+
+fn die_begin():
+    out_flush()
+    err_str(__str("Flash runtime error: "))
+
+fn die_end():
+    err_str(__str("\n"))
+    sys_exit(101)
+
+fn fl_panic_bounds(idx: Int, n: Int):
+    die_begin()
+    err_str(__str("list index "))
+    err_int(idx)
+    err_str(__str(" is out of range for a list of length "))
+    err_int(n)
+    die_end()
+
+fn fl_panic_divzero():
+    die_begin()
+    err_str(__str("division by zero"))
+    die_end()
+
+fn fl_unwrap_fail(r: Int):
+    die_begin()
+    err_str(__str("unwrap() on an error: "))
+    err_str(__peek(r, 16))
+    die_end()
+
+fn fl_assert_fail(msg: Int):
+    out_flush()
+    if msg == 0:
+        err_str(__str("Assertion failed\n"))
+    else:
+        err_str(__str("Assertion failed: "))
+        err_str(msg)
+        err_str(__str("\n"))
+    sys_exit(101)
+
+fn fl_fatal_error(msg: Int):
+    out_flush()
+    err_str(__str("Error: "))
+    err_str(msg)
+    err_str(__str("\n"))
+    sys_exit(1)
+
+# ------------------------------------------------------------------ program entry
+# The process entry point (generated by the compiler) calls this with the initial stack pointer.
+fn fl_start(sp: Int):
+    st = __state()
+    __poke(st, 0, sp)
+    flash_main()
+    out_flush()
+    if env_lookup(__str("FLASH_RT_LEAKCHECK")) != 0:
+        err_str(__str("[flash] live allocations at exit: "))
+        err_int(__peek(st, 24))
+        err_str(__str("\n"))
+    sys_exit(0)
