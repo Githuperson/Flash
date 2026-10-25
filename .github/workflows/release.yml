@@ -1,10 +1,17 @@
 # Builds binary archives when a version tag is pushed:   git tag v0.2.0 && git push origin v0.2.0
+# or when started by hand (Actions > release > Run workflow) with the tag to create: the release
+# action then creates the tag at the commit the workflow runs on.
 # Each platform builds the compiler natively and checks that the packaged compiler can build and
 # run a program before the archive is published.
 name: release
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to create for the release (for example v0.2.0)"
+        required: true
 permissions:
   contents: write
 jobs:
@@ -49,4 +56,6 @@ jobs:
         with:
           files: dist/*
           generate_release_notes: true
-          prerelease: ${{ contains(github.ref_name, '-') }}
+          tag_name: ${{ inputs.tag || github.ref_name }}
+          target_commitish: ${{ github.sha }}
+          prerelease: ${{ contains(inputs.tag || github.ref_name, '-') }}
