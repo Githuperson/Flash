@@ -35,7 +35,7 @@ flash --version
 
 The script grabs the prebuilt archive for your machine from the [latest release](https://github.com/Githuperson/Flash/releases/latest) and checks its SHA-256. **You don't need Rust, a C compiler or anything else.** Only if there's no archive for your machine (an Intel Mac, say) does it fall back to building from source, which needs [Rust](https://rustup.rs).
 
-**Windows:** run *irm https://raw.githubusercontent.com/Githuperson/Flash/main/install.ps1 | iex* in powershell (No need to run as administrator). Alternatively, you can download the zip file in releases and run *install.bat*.
+**Windows:** run "*irm https://raw.githubusercontent.com/Githuperson/Flash/main/install.ps1 | iex*" in powershell (No need to run as administrator). Alternatively, you can download the zip file in releases and run *install.bat*.
 
 ## Try it
 
