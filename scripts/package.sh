@@ -16,6 +16,9 @@ cp "target/release/flash$EXE" "target/release/flashpkg$EXE" "$STAGE/bin/"
 cp -R stdlib include "$STAGE/"
 cp LICENSE "$STAGE/"
 case "$TARGET" in
+  windows-*) cp install.ps1 uninstall.ps1 install.bat "$STAGE/" ;;
+esac
+case "$TARGET" in
   windows-*)
     ARCHIVE="flash-$TARGET.zip"
     # PowerShell's Compress-Archive ships with every Windows runner; `zip` may not exist
