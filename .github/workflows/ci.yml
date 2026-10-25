@@ -79,6 +79,14 @@ jobs:
           bash scripts/package.sh windows-x86_64
           .\scripts\build_windows_installer.ps1
           .\scripts\test_windows_installers.ps1
+      - name: Keep the Windows installers (download them from this run's Artifacts)
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-installers
+          path: |
+            dist/flash-setup-windows-x86_64.exe
+            dist/flash-setup-windows-x86_64.exe.sha256
+            dist/flash-windows-x86_64.zip
       - name: Benchmarks give the same answers as on Linux
         shell: bash
         run: |
