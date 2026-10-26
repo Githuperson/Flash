@@ -5,7 +5,7 @@
 
 use crate::ast::{BinOp, UnOp};
 use crate::source::Span;
-use crate::types::{IntTy, StructInfo, Type};
+use crate::types::{EnumInfo, IntTy, StructInfo, Type};
 
 pub type LocalId = usize;
 pub type FuncId = usize;
@@ -138,6 +138,16 @@ pub enum HKind {
         args: Vec<HExpr>,
     },
     Struct(Vec<HExpr>),
+    /// A new enum value: variant `variant` of enum `enum_id` with its payload.
+    Variant {
+        enum_id: usize,
+        variant: usize,
+        fields: Vec<HExpr>,
+    },
+    /// The variant number of an enum value (as Int).
+    EnumTag(Box<HExpr>),
+    /// Payload field `.2` of variant `.1` of an enum value (only valid when the tag matches).
+    EnumField(Box<HExpr>, usize, usize),
     Field(Box<HExpr>, usize),
     Index(Box<HExpr>, Box<HExpr>),
     List(Vec<HExpr>),
@@ -172,6 +182,12 @@ pub enum HStmtKind {
     ForList {
         var: LocalId,
         list: HExpr,
+        body: Vec<HStmt>,
+    },
+    /// Run `body` while `root` is borrowed (it cannot be modified or moved): the arms of a `match`
+    /// whose bindings point into the matched value.
+    Borrowed {
+        root: LocalId,
         body: Vec<HStmt>,
     },
     Break,
@@ -223,6 +239,7 @@ pub struct ExternFn {
 pub struct Program {
     pub funcs: Vec<HFunc>,
     pub structs: Vec<StructInfo>,
+    pub enums: Vec<EnumInfo>,
     pub main: FuncId,
     pub plugins: Vec<PluginBinding>,
     pub externs: Vec<ExternFn>,

@@ -201,10 +201,10 @@ fn body_mutates(stmts: &[HStmt], xs: LocalId) -> bool {
                 (matches!(b, Builtin::Append | Builtin::Pop) && args.first().and_then(root) == Some(xs)) || args.iter().any(|a| expr(a, xs))
             }
             HKind::Call(_, args) => args.iter().any(|a| root(a) == Some(xs) && !a.ty.is_copy() || expr(a, xs)),
-            HKind::PluginCall { args, .. } | HKind::ExternCall { args, .. } | HKind::Struct(args) | HKind::List(args) => {
+            HKind::PluginCall { args, .. } | HKind::ExternCall { args, .. } | HKind::Struct(args) | HKind::List(args) | HKind::Variant { fields: args, .. } => {
                 args.iter().any(|a| expr(a, xs))
             }
-            HKind::Unary(_, a) | HKind::Cast(a) | HKind::Try(a) | HKind::Field(a, _) => expr(a, xs),
+            HKind::Unary(_, a) | HKind::Cast(a) | HKind::Try(a) | HKind::Field(a, _) | HKind::EnumTag(a) | HKind::EnumField(a, _, _) => expr(a, xs),
             HKind::Binary(_, a, b) | HKind::Logic(_, a, b) | HKind::Index(a, b) => expr(a, xs) || expr(b, xs),
             _ => false,
         }
@@ -216,6 +216,7 @@ fn body_mutates(stmts: &[HStmt], xs: LocalId) -> bool {
         HStmtKind::While(c, b) => expr(c, xs) || body_mutates(b, xs),
         HStmtKind::ForRange { lo, hi, body, .. } => expr(lo, xs) || expr(hi, xs) || body_mutates(body, xs),
         HStmtKind::ForList { list, body, .. } => expr(list, xs) || body_mutates(body, xs),
+        HStmtKind::Borrowed { body, .. } => body_mutates(body, xs),
         HStmtKind::Return(Some(e)) => expr(e, xs),
         _ => false,
     })
@@ -226,7 +227,7 @@ fn body_assigns(stmts: &[HStmt], v: LocalId) -> bool {
     stmts.iter().any(|s| match &s.kind {
         HStmtKind::Assign(p, _) => matches!(p.kind, HKind::Local(id, _) if id == v),
         HStmtKind::If(_, a, b) => body_assigns(a, v) || body_assigns(b, v),
-        HStmtKind::While(_, b) | HStmtKind::ForRange { body: b, .. } | HStmtKind::ForList { body: b, .. } => body_assigns(b, v),
+        HStmtKind::While(_, b) | HStmtKind::ForRange { body: b, .. } | HStmtKind::ForList { body: b, .. } | HStmtKind::Borrowed { body: b, .. } => body_assigns(b, v),
         _ => false,
     })
 }
@@ -236,7 +237,7 @@ fn collect_moves_expr(e: &HExpr, out: &mut HashSet<LocalId>) {
         HKind::Local(id, UseMode::Move) => {
             out.insert(*id);
         }
-        HKind::Unary(_, a) | HKind::Field(a, _) | HKind::Cast(a) | HKind::Try(a) => collect_moves_expr(a, out),
+        HKind::Unary(_, a) | HKind::Field(a, _) | HKind::Cast(a) | HKind::Try(a) | HKind::EnumTag(a) | HKind::EnumField(a, _, _) => collect_moves_expr(a, out),
         HKind::Binary(_, a, b) | HKind::Logic(_, a, b) | HKind::Index(a, b) => {
             collect_moves_expr(a, out);
             collect_moves_expr(b, out);
@@ -244,6 +245,7 @@ fn collect_moves_expr(e: &HExpr, out: &mut HashSet<LocalId>) {
         HKind::Call(_, args)
         | HKind::Builtin(_, args)
         | HKind::Struct(args)
+        | HKind::Variant { fields: args, .. }
         | HKind::List(args)
         | HKind::PluginCall { args, .. }
         | HKind::ExternCall { args, .. } => {
@@ -281,6 +283,7 @@ fn collect_moves(stmts: &[HStmt], out: &mut HashSet<LocalId>) {
                 collect_moves_expr(list, out);
                 collect_moves(body, out);
             }
+            HStmtKind::Borrowed { body, .. } => collect_moves(body, out),
             HStmtKind::Return(Some(e)) => collect_moves_expr(e, out),
             _ => {}
         }
@@ -563,6 +566,34 @@ impl<'a, 'p> FnLower<'a, 'p> {
                 let sz = self.iconst(Ty::I64, si.size as i64);
                 self.rt("fl_free", &[p, sz]);
             }
+            Type::Enum(eid) => {
+                let info = self.lw.prog.enums[*eid].clone();
+                let tag = self.load(Ty::I64, p, 0);
+                let join = self.new_block();
+                for (vi, v) in info.variants.iter().enumerate() {
+                    if !v.fields.iter().any(|(_, t)| t.is_owned()) {
+                        continue;
+                    }
+                    let k = self.iconst(Ty::I64, vi as i64);
+                    let is = self.cmp(CmpOp::Eq, tag, k);
+                    let yes = self.new_block();
+                    let no = self.new_block();
+                    self.branch(is, yes, no);
+                    self.switch(yes);
+                    for (i, (_, ft)) in v.fields.iter().enumerate() {
+                        if ft.is_owned() {
+                            let x = self.load(Ty::I64, p, v.offsets[i] as i32);
+                            self.emit_drop(ft, x);
+                        }
+                    }
+                    self.jump_to(join);
+                    self.switch(no);
+                }
+                self.jump_to(join);
+                self.switch(join);
+                let sz = self.iconst(Ty::I64, info.size as i64);
+                self.rt("fl_free", &[p, sz]);
+            }
             Type::Result(t) => {
                 let tag = self.load(Ty::I64, p, 0);
                 let zero = self.iconst(Ty::I64, 0);
@@ -662,6 +693,42 @@ impl<'a, 'p> FnLower<'a, 'p> {
                 }
                 new
             }
+            Type::Enum(eid) => {
+                let info = self.lw.prog.enums[*eid].clone();
+                let sz = self.iconst(Ty::I64, info.size as i64);
+                let new = self.rtv("fl_alloc", &[sz]);
+                // copy every word, then deep-copy the owned payload of the variant that is present
+                for w in 0..(info.size / 8) {
+                    let x = self.load(Ty::I64, p, (w * 8) as i32);
+                    self.store(new, (w * 8) as i32, x);
+                }
+                let tag = self.load(Ty::I64, p, 0);
+                let join = self.new_block();
+                for (vi, v) in info.variants.iter().enumerate() {
+                    if !v.fields.iter().any(|(_, t)| t.is_owned()) {
+                        continue;
+                    }
+                    let k = self.iconst(Ty::I64, vi as i64);
+                    let is = self.cmp(CmpOp::Eq, tag, k);
+                    let yes = self.new_block();
+                    let no = self.new_block();
+                    self.branch(is, yes, no);
+                    self.switch(yes);
+                    for (i, (_, ft)) in v.fields.iter().enumerate() {
+                        if ft.is_owned() {
+                            let off = v.offsets[i] as i32;
+                            let x = self.load(Ty::I64, p, off);
+                            let c = self.emit_clone(ft, x);
+                            self.store(new, off, c);
+                        }
+                    }
+                    self.jump_to(join);
+                    self.switch(no);
+                }
+                self.jump_to(join);
+                self.switch(join);
+                new
+            }
             _ => unreachable!("no clone glue for {:?}", ty),
         }
     }
@@ -740,6 +807,7 @@ impl<'a, 'p> FnLower<'a, 'p> {
                     }
                 }
             }
+            HStmtKind::Borrowed { body, .. } => self.block(body),
             HStmtKind::Assign(place, value) => {
                 self.begin_temps();
                 let v = self.expr(value);
@@ -1099,6 +1167,30 @@ impl<'a, 'p> FnLower<'a, 'p> {
                 let addr = self.elem_addr(base, idx);
                 let te = self.tag_elem(&e.ty);
                 self.load_t(ir_ty(&e.ty), addr, 0, te)
+            }
+            HKind::EnumTag(inner) => {
+                let p = self.borrow(inner);
+                self.load(Ty::I64, p, 0)
+            }
+            HKind::EnumField(inner, variant, idx) => {
+                let p = self.borrow(inner);
+                let Type::Enum(eid) = &inner.ty else { unreachable!() };
+                let v = &self.lw.prog.enums[*eid].variants[*variant];
+                let (ty, off) = (ir_ty(&v.fields[*idx].1), v.offsets[*idx] as i32);
+                self.load(ty, p, off)
+            }
+            HKind::Variant { enum_id, variant, fields } => {
+                let info = &self.lw.prog.enums[*enum_id];
+                let (size, offs) = (info.size, info.variants[*variant].offsets.clone());
+                let vals: Vec<VReg> = fields.iter().map(|f| self.expr(f)).collect();
+                let sz = self.iconst(Ty::I64, size as i64);
+                let p = self.rtv("fl_alloc", &[sz]);
+                let tag = self.iconst(Ty::I64, *variant as i64);
+                self.store(p, 0, tag);
+                for (i, v) in vals.into_iter().enumerate() {
+                    self.store(p, offs[i] as i32, v);
+                }
+                p
             }
             HKind::Struct(fields) => {
                 let Type::Struct(sid) = &e.ty else { unreachable!() };

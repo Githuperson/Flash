@@ -48,6 +48,8 @@ pub struct Checker<'a> {
     pub diags: &'a mut Diagnostics,
     pub structs: Vec<StructInfo>,
     pub struct_ids: HashMap<String, StructId>,
+    pub enums: Vec<EnumInfo>,
+    pub enum_ids: HashMap<String, EnumId>,
     pub fns: Vec<FnItem>,
     pub fn_index: HashMap<(usize, String), usize>,
     pub instances: HashMap<(usize, Vec<Type>), FuncId>,
@@ -65,6 +67,8 @@ pub fn check_program(mods: &[LoadedModule], plugins: &[PluginBinding], diags: &m
         diags,
         structs: vec![],
         struct_ids: HashMap::new(),
+        enums: vec![],
+        enum_ids: HashMap::new(),
         fns: vec![],
         fn_index: HashMap::new(),
         instances: HashMap::new(),
@@ -112,7 +116,7 @@ impl<'a> Checker<'a> {
     }
 
     pub fn tn(&self, t: &Type) -> String {
-        display(t, &self.structs)
+        display(t, &self.structs, &self.enums)
     }
 
     fn annotate(&self, mut d: Diagnostic) -> Diagnostic {
@@ -139,6 +143,12 @@ impl<'a> Checker<'a> {
         // Structs: register names first (they may refer to each other), then resolve fields.
         for m in self.mods.iter() {
             for it in &m.ast.items {
+                if let Item::Enum(e) = it {
+                    if !self.enum_ids.contains_key(&e.name) {
+                        self.enum_ids.insert(e.name.clone(), self.enums.len());
+                        self.enums.push(EnumInfo { name: e.name.clone(), variants: vec![], span: e.name_span, size: 8 });
+                    }
+                }
                 if let Item::Struct(s) = it {
                     if !self.struct_ids.contains_key(&s.name) {
                         self.struct_ids.insert(s.name.clone(), self.structs.len());
@@ -161,14 +171,35 @@ impl<'a> Checker<'a> {
                 }
             }
         }
+        for m in self.mods.iter() {
+            for it in &m.ast.items {
+                if let Item::Enum(e) = it {
+                    let id = self.enum_ids[&e.name];
+                    let mut variants = vec![];
+                    for v in &e.variants {
+                        let mut fields = vec![];
+                        for f in &v.fields {
+                            if let Ok(t) = self.resolve_type(&f.ty) {
+                                fields.push((f.name.clone(), t));
+                            }
+                        }
+                        variants.push(VariantInfo { name: v.name.clone(), fields, offsets: vec![] });
+                    }
+                    self.enums[id].variants = variants;
+                }
+            }
+        }
         for i in 0..self.structs.len() {
             self.structs[i].compute_layout();
+        }
+        for i in 0..self.enums.len() {
+            self.enums[i].compute_layout();
         }
         for (mi, m) in self.mods.iter().enumerate() {
             for it in &m.ast.items {
                 if let Item::Fn(f) = it {
                     if let Some(o) = &f.owner {
-                        if !self.struct_ids.contains_key(o) {
+                        if !self.struct_ids.contains_key(o) && !self.enum_ids.contains_key(o) {
                             self.error(
                                 Diagnostic::error(f.name_span, format!("There is no struct called '{}' to attach the method '{}' to.", o, f.name))
                                     .help(format!("Define the struct first (`struct {}:` with its fields), or write a plain function instead.", o)),
@@ -279,6 +310,7 @@ impl<'a> Checker<'a> {
         Some(Program {
             funcs,
             structs: std::mem::take(&mut self.structs),
+            enums: std::mem::take(&mut self.enums),
             main: main_id,
             plugins: self.plugins.to_vec(),
             externs: std::mem::take(&mut self.externs),
@@ -325,9 +357,237 @@ impl<'a> Checker<'a> {
                 if let Some(id) = self.struct_ids.get(n) {
                     return self.no_args(t, Type::Struct(*id));
                 }
+                if let Some(id) = self.enum_ids.get(n) {
+                    return self.no_args(t, Type::Enum(*id));
+                }
                 self.fail(Diagnostic::error(t.span, format!("I don't know a type called '{}'.", n)))
             }
         }
+    }
+
+    fn find_variant(&self, eid: EnumId, name: &str) -> Option<usize> {
+        self.enums[eid].variants.iter().position(|v| v.name == name)
+    }
+
+    /// An unqualified variant name (`Circle`), if exactly one enum has it and nothing else uses the name.
+    fn unqualified_variant(&mut self, name: &str) -> Option<(EnumId, usize)> {
+        let module = self.cx().module;
+        if self.fn_index.contains_key(&(module, name.to_string())) || self.struct_ids.contains_key(name) {
+            return None;
+        }
+        let mut found = None;
+        for (eid, e) in self.enums.iter().enumerate() {
+            if let Some(vi) = e.variants.iter().position(|v| v.name == name) {
+                if found.is_some() {
+                    return None; // ambiguous: write Enum.Variant
+                }
+                found = Some((eid, vi));
+            }
+        }
+        found
+    }
+
+    fn construct_variant(&mut self, eid: EnumId, vi: usize, args: &[Arg], span: Span) -> R<HExpr> {
+        let fields = self.enums[eid].variants[vi].fields.clone();
+        let names: Vec<String> = fields.iter().map(|(n, _)| n.clone()).collect();
+        let what = format!("The variant {}.{}", self.enums[eid].name, self.enums[eid].variants[vi].name);
+        let list: Vec<(Option<&str>, &Expr)> = args.iter().map(|a| (a.name.as_deref(), &a.value)).collect();
+        let bound = self.bind_args(&what, &names, &list, span)?;
+        let mut hs = vec![];
+        let mut failed = false;
+        for ((fname, fty), e) in fields.iter().zip(bound.iter()) {
+            match self.expr(e, Some(fty), Ctx::Value) {
+                Ok(h) => {
+                    if h.ty != *fty && h.ty != Type::Error {
+                        let what = format!("The value '{}'", fname);
+                        let _ = self.type_mismatch::<()>(e.span, fty, &h, &what);
+                        failed = true;
+                    } else {
+                        hs.push(h);
+                    }
+                }
+                Err(_) => failed = true,
+            }
+        }
+        if failed {
+            return Err(());
+        }
+        Ok(he(HKind::Variant { enum_id: eid, variant: vi, fields: hs }, Type::Enum(eid), span))
+    }
+
+    /// `match value:` — checked for completeness, then turned into an `if` chain over the variant tag.
+    fn match_stmt(&mut self, scrutinee: &Expr, arms: &[MatchArm], span: Span, out: &mut Vec<HStmt>) -> R<()> {
+        let hs = self.expr(scrutinee, None, Ctx::Borrow)?;
+        let sty = hs.ty.clone();
+        if sty == Type::Error {
+            return Err(());
+        }
+        let aliasing = is_place(&hs) && sty.is_owned();
+        let root = Self::place_root(&hs);
+        let tmp = self.add_local("<match>", sty.clone(), if aliasing { LocalKind::LoopRef } else { LocalKind::Var }, scrutinee.span);
+        out.push(HStmt { kind: HStmtKind::Let(tmp, hs), span });
+        let tmp_ref = |s: Span, t: &Type| he(HKind::Local(tmp, if t.is_copy() { UseMode::Copy } else { UseMode::Borrow }), t.clone(), s);
+
+        // (condition, body); a missing condition means "always"
+        let mut cases: Vec<(Option<HExpr>, Vec<HStmt>)> = vec![];
+        let mut covered_variants: Vec<bool> = vec![];
+        let mut seen_true = false;
+        let mut seen_false = false;
+        let mut has_wild = false;
+        let mut uses_alias = false;
+        if let Type::Enum(eid) = &sty {
+            covered_variants = vec![false; self.enums[*eid].variants.len()];
+        }
+        let mut failed = false;
+        for arm in arms {
+            if has_wild {
+                self.error(Diagnostic::error(arm.span, "This arm can never match because an earlier `_` already matches everything."));
+                failed = true;
+                continue;
+            }
+            self.cx().scopes.push(HashMap::new());
+            let mut body = vec![];
+            let mut cond: Option<HExpr> = None;
+            let mut ok = true;
+            match &arm.pattern {
+                Pattern::Wildcard(_) => has_wild = true,
+                Pattern::Lit(le) => {
+                    let lit = if matches!(sty, Type::Int(_) | Type::Bool | Type::Str) { self.expr(le, Some(&sty), Ctx::Borrow) } else { Err(()) };
+                    match lit {
+                        Ok(l) if l.ty == sty => {
+                            if let HKind::Bool(b) = l.kind {
+                                if b { seen_true = true } else { seen_false = true }
+                            }
+                            cond = Some(he(HKind::Binary(BinOp::Eq, Box::new(tmp_ref(arm.span, &sty)), Box::new(l)), Type::Bool, arm.span));
+                        }
+                        Ok(l) => {
+                            let (a, b) = (self.tn(&sty), self.tn(&l.ty));
+                            self.error(Diagnostic::error(le.span, format!("This pattern is {}, but the value being matched is {}.", b, a)));
+                            ok = false;
+                        }
+                        Err(_) => {
+                            if !matches!(sty, Type::Int(_) | Type::Bool | Type::Str) {
+                                let tn = self.tn(&sty);
+                                self.error(Diagnostic::error(le.span, format!("A literal pattern cannot match a value of type {}.", tn)));
+                            }
+                            ok = false;
+                        }
+                    }
+                }
+                Pattern::Variant { enum_name, name, binds, span: psp } => {
+                    let Type::Enum(eid) = &sty else {
+                        let tn = self.tn(&sty);
+                        self.error(Diagnostic::error(*psp, format!("'{}' is a variant pattern, but the value being matched is {}, not an enum.", name, tn)));
+                        self.cx().scopes.pop();
+                        failed = true;
+                        continue;
+                    };
+                    let eid = *eid;
+                    let ename = self.enums[eid].name.clone();
+                    if let Some(en) = enum_name {
+                        if *en != ename {
+                            self.error(Diagnostic::error(*psp, format!("This pattern is for the enum {}, but the value being matched is {}.", en, ename)));
+                            ok = false;
+                        }
+                    }
+                    match if ok { self.find_variant(eid, name) } else { None } {
+                        Some(vi) => {
+                            if covered_variants[vi] {
+                                self.error(Diagnostic::error(*psp, format!("The variant {} is already handled by an earlier arm.", name)));
+                                ok = false;
+                            }
+                            covered_variants[vi] = true;
+                            let fields = self.enums[eid].variants[vi].fields.clone();
+                            if !binds.is_empty() && binds.len() != fields.len() {
+                                self.error(Diagnostic::error(
+                                    *psp,
+                                    format!("The variant {} has {} value(s), but this pattern names {}.", name, fields.len(), binds.len()),
+                                ));
+                                ok = false;
+                            }
+                            let tag = he(HKind::EnumTag(Box::new(tmp_ref(arm.span, &sty))), Type::Int(INT), arm.span);
+                            let idx = he(HKind::Int(vi as i64), Type::Int(INT), arm.span);
+                            cond = Some(he(HKind::Binary(BinOp::Eq, Box::new(tag), Box::new(idx)), Type::Bool, arm.span));
+                            if ok {
+                                for (i, b) in binds.iter().enumerate() {
+                                    if let Bind::Name(n, bsp) = b {
+                                        let fty = fields[i].1.clone();
+                                        let src = he(HKind::EnumField(Box::new(tmp_ref(arm.span, &sty)), vi, i), fty.clone(), *bsp);
+                                        let kind = if fty.is_copy() {
+                                            LocalKind::Var
+                                        } else {
+                                            uses_alias = true;
+                                            LocalKind::LoopRef
+                                        };
+                                        let id = self.add_local(n, fty, kind, *bsp);
+                                        body.push(HStmt { kind: HStmtKind::Let(id, src), span: *bsp });
+                                    }
+                                }
+                            }
+                        }
+                        None => {
+                            if ok {
+                                let c: Vec<&str> = self.enums[eid].variants.iter().map(|v| v.name.as_str()).collect();
+                                let mut d = Diagnostic::error(*psp, format!("The enum {} has no variant '{}'.", ename, name));
+                                if let Some(s) = suggest(name, c.iter().copied()) {
+                                    d = d.help(format!("Did you mean '{}'?", s));
+                                } else {
+                                    d = d.help(format!("Its variants are: {}.", c.join(", ")));
+                                }
+                                self.error(d);
+                            }
+                            ok = false;
+                        }
+                    }
+                }
+            }
+            if ok {
+                self.stmts_into(&arm.body, &mut body);
+            } else {
+                failed = true;
+            }
+            self.cx().scopes.pop();
+            cases.push((cond, body));
+        }
+        // completeness
+        let complete = has_wild
+            || match &sty {
+                Type::Enum(_) => covered_variants.iter().all(|c| *c),
+                Type::Bool => seen_true && seen_false,
+                _ => false,
+            };
+        if !complete && !failed {
+            let mut d = Diagnostic::error(span, "This `match` does not cover every possible value.");
+            if let Type::Enum(eid) = &sty {
+                let missing: Vec<&str> =
+                    self.enums[*eid].variants.iter().zip(&covered_variants).filter(|(_, c)| !**c).map(|(v, _)| v.name.as_str()).collect();
+                d = d.help(format!("Missing: {}. Add an arm for each, or a final `_:` arm.", missing.join(", ")));
+            } else {
+                d = d.help("Add a final `_:` arm for all other values.");
+            }
+            self.error(d);
+            failed = true;
+        }
+        if failed {
+            return Err(());
+        }
+        // Build the if / else-if chain. Without a `_` arm the last arm is the `else`, because the
+        // earlier ones leave exactly its case.
+        let n = cases.len();
+        let mut chain: Vec<HStmt> = vec![];
+        for (i, (cond, body)) in cases.into_iter().enumerate().rev() {
+            match cond {
+                Some(c) if !(i == n - 1 && !has_wild) => {
+                    chain = vec![HStmt { kind: HStmtKind::If(c, body, chain), span }];
+                }
+                _ => chain = body,
+            }
+        }
+        match (uses_alias, root) {
+            (true, Some(root)) if aliasing => out.push(HStmt { kind: HStmtKind::Borrowed { root, body: chain }, span }),
+            _ => out.extend(chain),
+        }
+        Ok(())
     }
 
     fn mk_copy(&self, e: HExpr, span: Span) -> HExpr {
@@ -578,6 +838,7 @@ impl<'a> Checker<'a> {
             }
             StmtKind::Assign { target, ty, value } => self.assign(target, ty.as_ref(), value, span, out)?,
             StmtKind::Unpack { targets, value } => self.unpack(targets, value, span, out)?,
+            StmtKind::Match { scrutinee, arms } => self.match_stmt(scrutinee, arms, span, out)?,
             StmtKind::AugAssign { target, op, value } => {
                 let bin = Expr {
                     kind: ExprKind::Binary(*op, Box::new(target.clone()), Box::new(value.clone())),
@@ -899,6 +1160,9 @@ impl<'a> Checker<'a> {
             ExprKind::None => Ok(he(HKind::None, Type::None, span)),
             ExprKind::Name(n) => {
                 let Some(id) = self.lookup(n) else {
+                    if let Some((eid, vi)) = self.unqualified_variant(n) {
+                        return self.construct_variant(eid, vi, &[], span);
+                    }
                     // Reported by the resolver; stay quiet here.
                     return Err(());
                 };
@@ -928,6 +1192,16 @@ impl<'a> Checker<'a> {
             ExprKind::Binary(op, a, b) => self.binary(*op, a, b, span, expected),
             ExprKind::List(elems) => self.list_lit(elems, expected, span),
             ExprKind::Field { base, name, name_span } => {
+                if let ExprKind::Name(en) = &base.kind {
+                    if self.lookup(en).is_none() {
+                        if let Some(&eid) = self.enum_ids.get(en) {
+                            return match self.find_variant(eid, name) {
+                                Some(vi) => self.construct_variant(eid, vi, &[], span),
+                                None => self.fail(Diagnostic::error(*name_span, format!("The enum {} has no variant '{}'.", en, name))),
+                            };
+                        }
+                    }
+                }
                 let hb = self.expr(base, None, Ctx::Borrow)?;
                 let Type::Struct(sid) = hb.ty else {
                     if hb.ty == Type::Error {
@@ -1170,6 +1444,9 @@ impl<'a> Checker<'a> {
                 if let Some(&sid) = self.struct_ids.get(n) {
                     return self.construct(sid, args, span);
                 }
+                if let Some((eid, vi)) = self.unqualified_variant(n) {
+                    return self.construct_variant(eid, vi, args, span);
+                }
                 if is_builtin(n) {
                     let list: Vec<&Expr> = args.iter().map(|a| &a.value).collect();
                     if let Some(a) = args.iter().find(|a| a.name.is_some()) {
@@ -1205,7 +1482,13 @@ impl<'a> Checker<'a> {
                 }
                 // Static method call: Player.new(args)
                 if let ExprKind::Name(tn) = &base.kind {
-                    if self.lookup(tn).is_none() && self.struct_ids.contains_key(tn) {
+                    if self.lookup(tn).is_none() && (self.struct_ids.contains_key(tn) || self.enum_ids.contains_key(tn)) {
+                        // Shape.Circle(2.0): an enum variant
+                        if let Some(&eid) = self.enum_ids.get(tn) {
+                            if let Some(vi) = self.find_variant(eid, name) {
+                                return self.construct_variant(eid, vi, args, span);
+                            }
+                        }
                         let Some(fidx) = self.find_method(tn, name) else {
                             return self.fail(Diagnostic::error(callee.span, format!("The struct {} has no method '{}'.", tn, name)).help(format!(
                                 "Define it with `fn {}.{}(...):`.",
@@ -1219,6 +1502,7 @@ impl<'a> Checker<'a> {
                 // Method call on a value: p.level_up(args) == Player.level_up(p, args)
                 let owner: Option<String> = match self.static_type(base) {
                     Some(Type::Struct(sid)) => Some(self.structs[sid].name.clone()),
+                    Some(Type::Enum(eid)) => Some(self.enums[eid].name.clone()),
                     _ => None,
                 };
                 let cur_module = self.cx().module;
@@ -1550,6 +1834,7 @@ fn contains_break(stmts: &[HStmt]) -> bool {
     stmts.iter().any(|s| match &s.kind {
         HStmtKind::Break => true,
         HStmtKind::If(_, a, b) => contains_break(a) || contains_break(b),
+        HStmtKind::Borrowed { body, .. } => contains_break(body),
         // `break` inside a nested loop only leaves that loop.
         _ => false,
     })
@@ -1561,6 +1846,7 @@ pub fn always_returns(stmts: &[HStmt]) -> bool {
         Some(_) => stmts.iter().any(|s| match &s.kind {
             HStmtKind::Return(_) => true,
             HStmtKind::If(_, a, b) => always_returns(a) && always_returns(b),
+            HStmtKind::Borrowed { body, .. } => always_returns(body),
             HStmtKind::While(c, body) => matches!(c.kind, HKind::Bool(true)) && !contains_break(body),
             _ => false,
         }),

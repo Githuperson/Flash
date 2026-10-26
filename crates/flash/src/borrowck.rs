@@ -29,13 +29,15 @@ struct Ck<'a> {
     /// `None` means the current point is unreachable (after return/break/continue).
     state: Option<Moved>,
     locked: Vec<(LocalId, Span)>,
+    /// values being matched on while the arms (whose bindings point into them) run
+    match_locked: Vec<(LocalId, Span)>,
     loop_breaks: Vec<Vec<Moved>>,
     loop_continues: Vec<Vec<Moved>>,
 }
 
 pub fn check(p: &Program, diags: &mut Diagnostics) {
     for f in &p.funcs {
-        let mut ck = Ck { f, prog: p, diags, state: Some(HashMap::new()), locked: vec![], loop_breaks: vec![], loop_continues: vec![] };
+        let mut ck = Ck { f, prog: p, diags, state: Some(HashMap::new()), locked: vec![], match_locked: vec![], loop_breaks: vec![], loop_continues: vec![] };
         ck.stmts(&f.body);
     }
 }
@@ -144,6 +146,11 @@ impl<'a> Ck<'a> {
                     body,
                 );
             }
+            HStmtKind::Borrowed { root, body } => {
+                self.match_locked.push((*root, s.span));
+                self.stmts(body);
+                self.match_locked.pop();
+            }
             HStmtKind::Break => {
                 if let (Some(st), Some(b)) = (self.state.take(), self.loop_breaks.last_mut()) {
                     b.push(st);
@@ -201,6 +208,14 @@ impl<'a> Ck<'a> {
     }
 
     fn check_mutation(&mut self, root: LocalId, span: Span) {
+        if let Some((_, lspan)) = self.match_locked.iter().find(|(l, _)| *l == root).copied() {
+            let n = self.name(root).to_string();
+            self.diags.push(
+                Diagnostic::error(span, format!("Cannot change or move '{}' inside a `match` on it while a name from the pattern still points into it.", n))
+                    .note(lspan, "the `match` is here")
+                    .help("Copy the value you need first (`copy(name)`), or do the change after the `match`."),
+            );
+        }
         if let Some((_, lspan)) = self.locked.iter().find(|(l, _)| *l == root).copied() {
             let n = self.name(root).to_string();
             self.diags.push(
@@ -247,7 +262,7 @@ impl<'a> Ck<'a> {
         match &e.kind {
             HKind::Int(_) | HKind::Float(_) | HKind::Bool(_) | HKind::Str(_) | HKind::None => {}
             HKind::Local(id, m) => self.use_local(*id, *m, e.span),
-            HKind::Unary(_, a) | HKind::Cast(a) | HKind::Try(a) | HKind::Field(a, _) => self.expr(a),
+            HKind::Unary(_, a) | HKind::Cast(a) | HKind::Try(a) | HKind::Field(a, _) | HKind::EnumTag(a) | HKind::EnumField(a, _, _) => self.expr(a),
             HKind::Binary(_, a, b) | HKind::Index(a, b) => {
                 self.expr(a);
                 self.expr(b);
@@ -259,7 +274,7 @@ impl<'a> Ck<'a> {
                 self.expr(b);
                 self.state = join(before, self.state.take());
             }
-            HKind::Struct(args) | HKind::List(args) => {
+            HKind::Struct(args) | HKind::List(args) | HKind::Variant { fields: args, .. } => {
                 for a in args {
                     self.expr(a);
                 }

@@ -1,0 +1,11 @@
+enum Light:
+    Red
+    Yellow
+    Green
+
+fn f(l: Light) -> Int:
+    match l:
+        Red:
+            return 1
+        Green:
+            return 2

@@ -12,6 +12,7 @@ pub struct Module {
 pub enum Item {
     Fn(FnDef),
     Struct(StructDef),
+    Enum(EnumDef),
     /// `extern fn name(a: Int) -> Int` — a C-ABI function provided by a linked library.
     ExternFn(ExternFnDef),
     /// `import name` — another Flash source file.
@@ -94,6 +95,47 @@ pub struct StructDef {
     pub span: Span,
 }
 
+/// `enum Shape:` with variants `Circle(radius: Float)`, `Rect(Float, Float)`, `Empty`.
+#[derive(Clone, Debug)]
+pub struct EnumDef {
+    pub name: String,
+    pub name_span: Span,
+    pub variants: Vec<VariantDef>,
+    pub span: Span,
+}
+
+#[derive(Clone, Debug)]
+pub struct VariantDef {
+    pub name: String,
+    pub name_span: Span,
+    /// Payload fields; unnamed ones are called "0", "1", ...
+    pub fields: Vec<FieldDef>,
+    pub span: Span,
+}
+
+#[derive(Clone, Debug)]
+pub struct MatchArm {
+    pub pattern: Pattern,
+    pub body: Vec<Stmt>,
+    pub span: Span,
+}
+
+#[derive(Clone, Debug)]
+pub enum Pattern {
+    /// `_` — matches anything.
+    Wildcard(Span),
+    /// A literal: `3`, `-1`, `"text"`, `True`.
+    Lit(Expr),
+    /// `Circle(r)`, `Shape.Circle(r)`, `Empty`; the names bind the payload fields in order.
+    Variant { enum_name: Option<String>, name: String, binds: Vec<Bind>, span: Span },
+}
+
+#[derive(Clone, Debug)]
+pub enum Bind {
+    Name(String, Span),
+    Wild,
+}
+
 #[derive(Clone, Debug)]
 pub struct TypeExpr {
     pub name: String,
@@ -139,6 +181,11 @@ pub enum StmtKind {
     Unpack {
         targets: Vec<Expr>,
         value: Expr,
+    },
+    /// `match value:` with one pattern per indented arm.
+    Match {
+        scrutinee: Expr,
+        arms: Vec<MatchArm>,
     },
     Break,
     Continue,

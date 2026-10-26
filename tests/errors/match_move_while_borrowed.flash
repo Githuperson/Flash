@@ -1,0 +1,14 @@
+enum Msg:
+    Text(body: String)
+    Quit
+
+fn eat(own m: Msg):
+    pass
+
+m = Msg.Text("hello")
+match m:
+    Text(b):
+        eat(m)
+        say(b)
+    Quit:
+        pass

@@ -126,3 +126,18 @@ fn division_by_constants_matches_x86_64_on_aarch64() {
         }
     }
 }
+
+#[test]
+fn language_features_run_on_aarch64() {
+    if !emulator_available() {
+        eprintln!("skipped: python3 with unicorn is not available");
+        return;
+    }
+    for name in ["methods", "tuples", "enums"] {
+        let src = repo_root().join("tests/programs").join(format!("{}.flash", name));
+        let expected = std::fs::read_to_string(src.with_extension("expected")).unwrap();
+        for target in TARGETS {
+            assert_eq!(emulate_for(&src, true, target, &format!("a64-lang-{}", name)), expected, "{} {}", name, target);
+        }
+    }
+}

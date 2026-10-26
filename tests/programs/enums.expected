@@ -1,0 +1,16 @@
+circle 2.0 12.0
+rect 3.0x4.0 12.0
+label hi 0.0
+nothing 0.0
+Rect(3.0, 4.0)
+[Circle(2.0), Rect(3.0, 4.0), Label("hi"), Empty]
+red
+green
+yellow
+red
+11
+zero one minus one many
+1 2 0
+unqualified 1.5
+yes
+hi

@@ -24,6 +24,7 @@ impl<'a, 'p> FnLower<'a, 'p> {
             }
             Type::List(et) => self.print_list(v, et),
             Type::Struct(sid) => self.print_tuple(v, *sid),
+            Type::Enum(eid) => self.print_enum(v, *eid),
             t => unreachable!("print {:?}", t),
         }
     }
@@ -99,10 +100,42 @@ impl<'a, 'p> FnLower<'a, 'p> {
             }
             Type::List(inner) => self.print_list(ev, inner),
             Type::Struct(sid) => self.print_tuple(ev, *sid),
+            Type::Enum(eid) => self.print_enum(ev, *eid),
             _ => {
                 self.rt("fl_print_none", &[]);
             }
         }
+    }
+
+    /// Print an enum value as `Variant` or `Variant(a, b)`.
+    fn print_enum(&mut self, p: VReg, eid: usize) {
+        let info = self.lw.prog.enums[eid].clone();
+        let tag = self.load(Ty::I64, p, 0);
+        let join = self.new_block();
+        for (vi, v) in info.variants.iter().enumerate() {
+            let k = self.iconst(Ty::I64, vi as i64);
+            let is = self.cmp(CmpOp::Eq, tag, k);
+            let yes = self.new_block();
+            let no = self.new_block();
+            self.branch(is, yes, no);
+            self.switch(yes);
+            self.print_lit(&v.name);
+            if !v.fields.is_empty() {
+                self.print_lit("(");
+                for (i, (_, ft)) in v.fields.iter().enumerate() {
+                    if i > 0 {
+                        self.print_lit(", ");
+                    }
+                    let fv = self.load(ir_ty(ft), p, v.offsets[i] as i32);
+                    self.print_elem(fv, ft);
+                }
+                self.print_lit(")");
+            }
+            self.jump_to(join);
+            self.switch(no);
+        }
+        self.jump_to(join);
+        self.switch(join);
     }
 
     /// Print `(a, b)` for a tuple (a pointer to its fields).

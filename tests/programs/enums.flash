@@ -1,0 +1,124 @@
+# Enums with payloads and `match`
+enum Shape:
+    Circle(radius: Float)
+    Rect(w: Float, h: Float)
+    Label(text: String)
+    Empty
+
+enum Light:
+    Red
+    Yellow
+    Green
+
+enum Tree:
+    Leaf(value: Int)
+    Node(children: List[Tree])
+
+fn Shape.area(self) -> Float:
+    match self:
+        Circle(r):
+            return 3.0 * r * r
+        Rect(w, h):
+            return w * h
+        Label(_):
+            return 0.0
+        Empty:
+            return 0.0
+
+fn Shape.describe(self) -> String:
+    match self:
+        Circle(r):
+            return f"circle {r}"
+        Rect(w, h):
+            return f"rect {w}x{h}"
+        Label(t):
+            return "label " + t
+        _:
+            return "nothing"
+
+fn next(l: Light) -> Light:
+    match l:
+        Red:
+            return Light.Green
+        Green:
+            return Light.Yellow
+        Yellow:
+            return Light.Red
+
+fn name(l: Light) -> String:
+    match l:
+        Red:
+            return "red"
+        Yellow:
+            return "yellow"
+        Green:
+            return "green"
+
+fn total(t: Tree) -> Int:
+    match t:
+        Leaf(v):
+            return v
+        Node(kids):
+            sum = 0
+            for k in kids:
+                sum += total(k)
+            return sum
+
+fn classify(n: Int) -> String:
+    match n:
+        0:
+            return "zero"
+        1:
+            return "one"
+        -1:
+            return "minus one"
+        _:
+            return "many"
+
+fn word(s: String) -> Int:
+    match s:
+        "a":
+            return 1
+        "b":
+            return 2
+        _:
+            return 0
+
+shapes = [Shape.Circle(2.0), Shape.Rect(3.0, 4.0), Shape.Label("hi"), Shape.Empty]
+for s in shapes:
+    say(s.describe(), s.area())
+say(shapes[1])
+say(shapes)
+
+l = Light.Red
+for i in 0..4:
+    say(name(l))
+    l = next(l)
+
+leaf = Tree.Leaf(5)
+tree = Tree.Node([Tree.Leaf(1), Tree.Node([Tree.Leaf(2), Tree.Leaf(3)]), leaf])
+say(total(tree))
+
+say(classify(0), classify(1), classify(-1), classify(42))
+say(word("a"), word("b"), word("zzz"))
+
+c = Circle(1.5)
+match c:
+    Circle(r):
+        say("unqualified", r)
+    _:
+        say("other")
+
+t = True
+match t:
+    True:
+        say("yes")
+    False:
+        say("no")
+
+dup = copy(shapes[2])
+match dup:
+    Label(text):
+        say(text)
+    _:
+        pass

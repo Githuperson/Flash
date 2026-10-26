@@ -37,16 +37,20 @@ impl<'a> Checker<'a> {
     }
 
     fn printable(&mut self, name: &str, h: &HExpr, span: Span) -> R<()> {
-        fn ok(t: &Type, structs: &[crate::types::StructInfo]) -> bool {
+        fn ok(t: &Type, structs: &[crate::types::StructInfo], enums: &[crate::types::EnumInfo], depth: u32) -> bool {
+            if depth > 6 {
+                return true; // recursive types: the runtime printer recurses the same way
+            }
             match t {
                 Type::Int(_) | Type::Float | Type::Bool | Type::Str | Type::None => true,
-                Type::List(e) => ok(e, structs),
-                Type::Struct(sid) => structs[*sid].tuple && structs[*sid].fields.iter().all(|(_, f)| ok(f, structs)),
+                Type::List(e) => ok(e, structs, enums, depth + 1),
+                Type::Struct(sid) => structs[*sid].tuple && structs[*sid].fields.iter().all(|(_, f)| ok(f, structs, enums, depth + 1)),
+                Type::Enum(eid) => enums[*eid].variants.iter().all(|v| v.fields.iter().all(|(_, f)| ok(f, structs, enums, depth + 1))),
                 _ => false,
             }
         }
         match &h.ty {
-            t if ok(t, &self.structs) && (name != "str" || !matches!(t, Type::List(_) | Type::Struct(_))) => Ok(()),
+            t if ok(t, &self.structs, &self.enums, 0) && (name != "str" || !matches!(t, Type::List(_) | Type::Struct(_) | Type::Enum(_))) => Ok(()),
             _ => {
                 let tn = self.tn(&h.ty);
                 self.fail(

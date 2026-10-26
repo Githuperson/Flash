@@ -26,6 +26,8 @@ pub enum Tok {
     // keywords
     Fn,
     Struct,
+    Enum,
+    Match,
     If,
     Elif,
     Else,
@@ -105,6 +107,8 @@ impl Tok {
         match self {
             Tok::Fn => "fn",
             Tok::Struct => "struct",
+            Tok::Enum => "enum",
+            Tok::Match => "match",
             Tok::If => "if",
             Tok::Elif => "elif",
             Tok::Else => "else",
@@ -202,6 +206,8 @@ fn keyword(s: &str) -> Option<Tok> {
     Some(match s {
         "fn" => Tok::Fn,
         "struct" => Tok::Struct,
+        "enum" => Tok::Enum,
+        "match" => Tok::Match,
         "if" => Tok::If,
         "elif" => Tok::Elif,
         "else" => Tok::Else,

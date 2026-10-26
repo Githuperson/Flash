@@ -1,0 +1,12 @@
+enum Light:
+    Red
+    Green
+
+l = Light.Red
+match l:
+    Red:
+        say("r")
+    Blue:
+        say("b")
+    _:
+        say("other")

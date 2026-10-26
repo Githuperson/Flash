@@ -143,6 +143,7 @@ impl<'a> Parser<'a> {
         match self.peek() {
             Tok::Fn => self.fn_def().map(Item::Fn),
             Tok::Struct => self.struct_def().map(Item::Struct),
+            Tok::Enum => self.enum_def().map(Item::Enum),
             Tok::Extern => self.extern_fn().map(Item::ExternFn),
             Tok::Import => self.import().map(Item::Import),
             Tok::Use => self.use_plugin().map(Item::UsePlugin),
@@ -339,6 +340,137 @@ impl<'a> Parser<'a> {
         Ok(StructDef { name, name_span, fields, span: header })
     }
 
+    /// ```text
+    /// enum Shape:
+    ///     Circle(radius: Float)
+    ///     Rect(Float, Float)
+    ///     Empty
+    /// ```
+    fn enum_def(&mut self) -> PResult<EnumDef> {
+        let start = self.bump().span;
+        let (name, name_span) = self.ident("an enum name after `enum`")?;
+        let header = start.to(self.prev_span());
+        self.expect(Tok::Colon, "':' after the enum name")?;
+        self.expect(Tok::Newline, "a new line after ':'")?;
+        self.expect(Tok::Indent, "an indented list of variants")?;
+        let mut variants = vec![];
+        loop {
+            while self.eat(&Tok::Newline) {}
+            if self.at(&Tok::Dedent) || self.at(&Tok::Eof) {
+                break;
+            }
+            if self.eat(&Tok::Pass) {
+                continue;
+            }
+            let r: PResult<()> = (|| {
+                let (vname, vsp) = self.ident("a variant name")?;
+                let mut fields = vec![];
+                if self.eat(&Tok::LParen) {
+                    while !self.at(&Tok::RParen) {
+                        let fsp = self.span();
+                        let named = matches!(self.peek(), Tok::Ident(_)) && matches!(self.peek_at(1), Tok::Colon);
+                        let fname = if named {
+                            let (n, _) = self.ident("a field name")?;
+                            self.expect(Tok::Colon, "':' and a type after the field name")?;
+                            n
+                        } else {
+                            fields.len().to_string()
+                        };
+                        let ty = self.type_expr()?;
+                        fields.push(FieldDef { name: fname, ty, span: fsp.to(self.prev_span()) });
+                        if !self.eat(&Tok::Comma) {
+                            break;
+                        }
+                    }
+                    self.expect(Tok::RParen, "')' to close the variant's fields")?;
+                }
+                variants.push(VariantDef { name: vname, name_span: vsp, fields, span: vsp.to(self.prev_span()) });
+                self.end_of_stmt()
+            })();
+            if let Err(d) = r {
+                self.diags.push(d);
+                self.recover();
+            }
+        }
+        self.eat(&Tok::Dedent);
+        Ok(EnumDef { name, name_span, variants, span: header })
+    }
+
+    fn pattern(&mut self) -> PResult<Pattern> {
+        let sp = self.span();
+        match self.peek().clone() {
+            Tok::Ident(n) if n == "_" => {
+                self.bump();
+                Ok(Pattern::Wildcard(sp))
+            }
+            Tok::Int(_) | Tok::Str(_) | Tok::True | Tok::False | Tok::Minus | Tok::Float(_) => {
+                let e = self.unary_expr()?;
+                Ok(Pattern::Lit(e))
+            }
+            Tok::Ident(first) => {
+                self.bump();
+                let (enum_name, name) = if self.eat(&Tok::Dot) {
+                    let (v, _) = self.ident("a variant name after '.'")?;
+                    (Some(first), v)
+                } else {
+                    (None, first)
+                };
+                let mut binds = vec![];
+                if self.eat(&Tok::LParen) {
+                    while !self.at(&Tok::RParen) {
+                        let bsp = self.span();
+                        let (b, _) = self.ident("a name for the variant's value (or `_`)")?;
+                        binds.push(if b == "_" { Bind::Wild } else { Bind::Name(b, bsp) });
+                        if !self.eat(&Tok::Comma) {
+                            break;
+                        }
+                    }
+                    self.expect(Tok::RParen, "')' to close the pattern")?;
+                }
+                Ok(Pattern::Variant { enum_name, name, binds, span: sp.to(self.prev_span()) })
+            }
+            _ => Err(self.unexpected("a pattern (a variant like `Circle(r)`, a literal, or `_`)")),
+        }
+    }
+
+    fn match_stmt(&mut self) -> PResult<Stmt> {
+        let start = self.bump().span;
+        let scrutinee = self.expr()?;
+        self.expect(Tok::Colon, "':' after the value to match")?;
+        self.expect(Tok::Newline, "a new line after ':'")?;
+        if !self.at(&Tok::Indent) {
+            return Err(Diagnostic::error(self.span(), "Expected indented `pattern:` arms under `match`.")
+                .help("For example:\n    match shape:\n        Circle(r):\n            say(r)\n        _:\n            say(\"other\")"));
+        }
+        self.bump();
+        let mut arms = vec![];
+        loop {
+            while self.eat(&Tok::Newline) {}
+            if self.at(&Tok::Dedent) {
+                self.bump();
+                break;
+            }
+            if self.at(&Tok::Eof) {
+                break;
+            }
+            let asp = self.span();
+            let r: PResult<MatchArm> = (|| {
+                let pattern = self.pattern()?;
+                let body = self.block("':' after the pattern")?;
+                Ok(MatchArm { pattern, body, span: asp })
+            })();
+            match r {
+                Ok(a) => arms.push(a),
+                Err(d) => {
+                    self.diags.push(d);
+                    self.recover();
+                }
+            }
+        }
+        let span = start.to(self.prev_span());
+        Ok(Stmt { kind: StmtKind::Match { scrutinee, arms }, span })
+    }
+
     // ---- statements ----
     fn end_of_stmt(&mut self) -> PResult<()> {
         match self.peek() {
@@ -401,6 +533,8 @@ impl<'a> Parser<'a> {
             Tok::Fn => Err(Diagnostic::error(start, "Functions can only be defined at the top level of a file.")
                 .help("Move this `fn` out of the indented block.")),
             Tok::Struct => Err(Diagnostic::error(start, "Structs can only be defined at the top level of a file.")),
+            Tok::Enum => Err(Diagnostic::error(start, "Enums can only be defined at the top level of a file.")),
+            Tok::Match => self.match_stmt(),
             Tok::Break => {
                 self.bump();
                 self.end_of_stmt()?;

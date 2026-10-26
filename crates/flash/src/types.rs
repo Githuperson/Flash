@@ -48,6 +48,7 @@ impl IntTy {
 }
 
 pub type StructId = usize;
+pub type EnumId = usize;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Type {
@@ -58,6 +59,8 @@ pub enum Type {
     None,
     List(Box<Type>),
     Struct(StructId),
+    /// An enum value: a heap block `[tag][payload of the variant]`.
+    Enum(EnumId),
     /// `Result[T]`: either a value of type T or an error message.
     Result(Box<Type>),
     /// Poison type that suppresses follow-up errors.
@@ -84,7 +87,7 @@ impl Type {
             Type::Int(i) => (i.bits / 8) as u32,
             Type::Float => 8,
             Type::Bool | Type::None | Type::Error => 1,
-            Type::Str | Type::List(_) | Type::Struct(_) | Type::Result(_) => 8,
+            Type::Str | Type::List(_) | Type::Struct(_) | Type::Enum(_) | Type::Result(_) => 8,
         }
     }
 }
@@ -118,16 +121,52 @@ impl StructInfo {
     }
 }
 
-pub fn display(t: &Type, structs: &[StructInfo]) -> String {
+#[derive(Clone, Debug)]
+pub struct VariantInfo {
+    pub name: String,
+    pub fields: Vec<(String, Type)>,
+    /// Byte offset of each payload field inside the enum block (the tag is at offset 0).
+    pub offsets: Vec<u32>,
+}
+
+#[derive(Clone, Debug)]
+pub struct EnumInfo {
+    pub name: String,
+    pub variants: Vec<VariantInfo>,
+    pub span: Span,
+    /// Total heap size (multiple of 8): tag plus the largest payload.
+    pub size: u32,
+}
+
+impl EnumInfo {
+    pub fn compute_layout(&mut self) {
+        let mut size = 8u32;
+        for v in &mut self.variants {
+            let mut off = 8u32;
+            v.offsets.clear();
+            for (_, t) in &v.fields {
+                let sz = t.size();
+                off = off.div_ceil(sz) * sz;
+                v.offsets.push(off);
+                off += sz;
+            }
+            size = size.max(off.div_ceil(8) * 8);
+        }
+        self.size = size;
+    }
+}
+
+pub fn display(t: &Type, structs: &[StructInfo], enums: &[EnumInfo]) -> String {
     match t {
         Type::Int(i) => i.name(),
         Type::Float => "Float".into(),
         Type::Bool => "Bool".into(),
         Type::Str => "String".into(),
         Type::None => "None".into(),
-        Type::List(e) => format!("List[{}]", display(e, structs)),
+        Type::List(e) => format!("List[{}]", display(e, structs, enums)),
         Type::Struct(id) => structs[*id].name.clone(),
-        Type::Result(e) => format!("Result[{}]", display(e, structs)),
+        Type::Enum(id) => enums[*id].name.clone(),
+        Type::Result(e) => format!("Result[{}]", display(e, structs, enums)),
         Type::Error => "<error>".into(),
     }
 }

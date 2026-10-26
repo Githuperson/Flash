@@ -23,13 +23,17 @@ struct Resolver<'a> {
     structs: HashMap<String, Span>,
     /// every method as `Owner.name` (methods are attached to structs, which are global)
     methods: HashSet<String>,
+    /// enum name -> its variant names (enum names are also in `structs`, so they act as types)
+    enums: HashMap<String, Vec<String>>,
+    /// variant name -> enums that have it (for unqualified use)
+    variants: HashMap<String, Vec<String>>,
     cur: usize,
     scopes: Vec<HashSet<String>>,
     loop_depth: usize,
 }
 
 pub fn resolve(mods: &[LoadedModule], plugins: &[PluginBinding], diags: &mut Diagnostics) {
-    let mut r = Resolver { mods, plugins, diags, fns: vec![], structs: HashMap::new(), methods: HashSet::new(), cur: 0, scopes: vec![], loop_depth: 0 };
+    let mut r = Resolver { mods, plugins, diags, fns: vec![], structs: HashMap::new(), methods: HashSet::new(), enums: HashMap::new(), variants: HashMap::new(), cur: 0, scopes: vec![], loop_depth: 0 };
     r.run();
 }
 
@@ -96,9 +100,26 @@ impl<'a> Resolver<'a> {
                             }
                         }
                     }
+                    Item::Enum(e) => {
+                        if let Some(prev) = self.structs.get(&e.name) {
+                            self.diags.push(
+                                Diagnostic::error(e.name_span, format!("The type '{}' is defined twice.", e.name)).note(*prev, "first defined here"),
+                            );
+                        } else {
+                            self.structs.insert(e.name.clone(), e.name_span);
+                        }
+                        let mut seen = HashSet::new();
+                        for v in &e.variants {
+                            if !seen.insert(v.name.clone()) {
+                                self.diags.push(Diagnostic::error(v.name_span, format!("The variant '{}' appears twice in enum {}.", v.name, e.name)));
+                            }
+                            self.variants.entry(v.name.clone()).or_default().push(e.name.clone());
+                        }
+                        self.enums.insert(e.name.clone(), e.variants.iter().map(|v| v.name.clone()).collect());
+                    }
                     Item::Stmt(s) if mi != 0 => {
                         self.diags.push(
-                            Diagnostic::error(s.span, "Imported modules can only contain `fn`, `struct` and `import`.")
+                            Diagnostic::error(s.span, "Imported modules can only contain `fn`, `struct`, `enum` and `import`.")
                                 .help("Put this statement inside a function."),
                         );
                     }
@@ -157,6 +178,13 @@ impl<'a> Resolver<'a> {
                     Item::Struct(s) => {
                         for f in &s.fields {
                             self.type_expr(&f.ty);
+                        }
+                    }
+                    Item::Enum(e) => {
+                        for v in &e.variants {
+                            for f in &v.fields {
+                                self.type_expr(&f.ty);
+                            }
                         }
                     }
                     Item::ExternFn(f) => {
@@ -237,6 +265,27 @@ impl<'a> Resolver<'a> {
                         }
                         _ => self.expr(t),
                     }
+                }
+            }
+            StmtKind::Match { scrutinee, arms } => {
+                self.expr(scrutinee);
+                for arm in arms {
+                    self.scopes.push(HashSet::new());
+                    match &arm.pattern {
+                        Pattern::Wildcard(_) => {}
+                        Pattern::Lit(e) => self.expr(e),
+                        Pattern::Variant { binds, .. } => {
+                            for b in binds {
+                                if let Bind::Name(n, _) = b {
+                                    self.scopes.last_mut().unwrap().insert(n.clone());
+                                }
+                            }
+                        }
+                    }
+                    for st in &arm.body {
+                        self.stmt(st);
+                    }
+                    self.scopes.pop();
                 }
             }
             StmtKind::AugAssign { target, value, .. } => {
@@ -332,10 +381,12 @@ impl<'a> Resolver<'a> {
                             Diagnostic::error(e.span, format!("'{}' is a function, not a value.", n))
                                 .help(format!("Call it with parentheses: {}(...)", n)),
                         );
+                    } else if self.variants.contains_key(n) {
+                        // a variant without fields used as a value: Empty
                     } else if self.structs.contains_key(n) {
                         self.diags.push(
-                            Diagnostic::error(e.span, format!("'{}' is a struct, not a value.", n))
-                                .help(format!("Create one with {}(field=value, ...)", n)),
+                            Diagnostic::error(e.span, format!("'{}' is a struct or enum, not a value.", n))
+                                .help(format!("Create a struct with {}(field=value, ...), or an enum value with {}.Variant.", n, n)),
                         );
                     } else {
                         self.unknown_name(n, e.span, false);
@@ -358,7 +409,7 @@ impl<'a> Resolver<'a> {
                                 callee.span,
                                 format!("'{}' is a variable, not a function, so it cannot be called.", n),
                             ));
-                        } else if !(self.fns[self.cur].contains(n) || is_builtin(n) || self.structs.contains_key(n)) {
+                        } else if !(self.fns[self.cur].contains(n) || is_builtin(n) || self.structs.contains_key(n) || self.variants.contains_key(n)) {
                             self.unknown_name(n, callee.span, true);
                         }
                     }
@@ -369,6 +420,8 @@ impl<'a> Resolver<'a> {
                                 if !(self.fns[self.cur].contains(name) || is_builtin(name) || self.is_method_name(name)) {
                                     self.unknown_name(name, *name_span, true);
                                 }
+                            } else if self.enums.contains_key(m) && self.enums[m].iter().any(|v| v == name) {
+                                // enum variant: Shape.Circle(...)
                             } else if self.structs.contains_key(m) {
                                 // static method: Player.new(...)
                                 if !self.methods.contains(&format!("{}.{}", m, name)) {
@@ -411,7 +464,22 @@ impl<'a> Resolver<'a> {
                     }
                 }
             }
-            ExprKind::Field { base, .. } => self.expr(base),
+            ExprKind::Field { base, name, name_span } => {
+                if let ExprKind::Name(m) = &base.kind {
+                    if !self.declared(m) && self.enums.contains_key(m) {
+                        if !self.enums[m].iter().any(|v| v == name) {
+                            let c: Vec<&str> = self.enums[m].iter().map(|s| s.as_str()).collect();
+                            let mut d = Diagnostic::error(*name_span, format!("The enum {} has no variant '{}'.", m, name));
+                            if let Some(s) = suggest(name, c.into_iter()) {
+                                d = d.help(format!("Did you mean '{}'?", s));
+                            }
+                            self.diags.push(d);
+                        }
+                        return;
+                    }
+                }
+                self.expr(base)
+            }
             ExprKind::Index { base, index } => {
                 self.expr(base);
                 self.expr(index);
