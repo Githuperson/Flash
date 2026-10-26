@@ -29,6 +29,7 @@ def main():
         off = 32
         entry = None
         main_off = None
+        data_vmaddr = None
         text_base = None
         for _ in range(ncmds):
             cmd, size = struct.unpack_from('<II', data, off)
@@ -37,6 +38,8 @@ def main():
                 vmaddr, vmsize, fileoff, filesize = struct.unpack_from('<QQQQ', data, off + 24)
                 if name == b'__TEXT':
                     text_base = vmaddr
+                if name == b'__DATA':
+                    data_vmaddr = vmaddr
                 if name != b'__PAGEZERO':
                     segs.append((vmaddr, vmsize, fileoff, filesize))
             elif cmd == 0x80000028:  # LC_MAIN: entry offset from the start of __TEXT
@@ -81,6 +84,70 @@ def main():
     mmap_next = [0x20000000]
     state = {'exit': None}
     fds = {}
+
+
+    # ---- cooperative threads (macOS: pthread_create & co. imported through the bind table at the start of __DATA)
+    REGS = [getattr(__import__('unicorn.arm64_const', fromlist=['x']), 'UC_ARM64_REG_X%d' % i) for i in range(31)]
+    ctxs = []          # runnable thread contexts, the running one first
+    finished = set()
+    nthreads = [1]
+    cur = {'id': 0}
+    region = [0x700000000]
+    def alloc_region(n):
+        a = region[0]; mu.mem_map(a, n); region[0] += n + 0x10000; return a
+    def save_ctx():
+        c = {'x': [mu.reg_read(r) for r in REGS], 'sp': mu.reg_read(UC_ARM64_REG_SP), 'pc': mu.reg_read(UC_ARM64_REG_PC),
+             'nzcv': mu.reg_read(UC_ARM64_REG_NZCV), 'tp': mu.reg_read(UC_ARM64_REG_TPIDRRO_EL0), 'id': cur['id']}
+        return c
+    def load_ctx(c):
+        for r, v in zip(REGS, c['x']): mu.reg_write(r, v)
+        mu.reg_write(UC_ARM64_REG_SP, c['sp']); mu.reg_write(UC_ARM64_REG_NZCV, c['nzcv'])
+        mu.reg_write(UC_ARM64_REG_TPIDRRO_EL0, c['tp']); mu.reg_write(UC_ARM64_REG_PC, c['pc']); cur['id'] = c['id']
+    def switch(resume_pc=None):
+        """Suspend the running thread (it resumes at resume_pc, default: where it is) and run the next one."""
+        if not ctxs: return
+        me = save_ctx()
+        if resume_pc is not None: me['pc'] = resume_pc
+        nxt = ctxs.pop(0); ctxs.append(me); load_ctx(nxt)
+    def thread_exit():
+        finished.add(cur['id'])
+        if not ctxs:
+            state['exit'] = 0; mu.emu_stop(); return
+        load_ctx(ctxs.pop(0))
+    FAKE = 0x6000000000
+    NAMES = ['pthread_create', 'pthread_join', 'pthread_attr_init', 'pthread_attr_setstacksize']
+    EXIT_ADDR = FAKE + 0x800
+    def bind_hook(mu_, addr, size, ud):
+        lr = mu.reg_read(UC_ARM64_REG_X30)
+        if addr == EXIT_ADDR:
+            thread_exit(); return
+        name = NAMES[(addr - FAKE) // 16]
+        if name in ('pthread_attr_init', 'pthread_attr_setstacksize'):
+            mu.reg_write(UC_ARM64_REG_X0, 0); mu.reg_write(UC_ARM64_REG_PC, lr)
+        elif name == 'pthread_create':
+            tid_ptr, _attr, fn, arg = [mu.reg_read(r) for r in (UC_ARM64_REG_X0, UC_ARM64_REG_X1, UC_ARM64_REG_X2, UC_ARM64_REG_X3)]
+            tid = nthreads[0]; nthreads[0] += 1
+            tsd = alloc_region(0x4000); stack = alloc_region(0x400000)
+            xs = [0] * 31; xs[0] = arg; xs[30] = EXIT_ADDR
+            ctxs.append({'x': xs, 'sp': stack + 0x400000 - 64, 'pc': fn, 'nzcv': 0, 'tp': tsd, 'id': tid})
+            mu.mem_write(tid_ptr, struct.pack('<Q', tid))
+            mu.reg_write(UC_ARM64_REG_X0, 0); mu.reg_write(UC_ARM64_REG_PC, lr)
+        elif name == 'pthread_join':
+            tid = mu.reg_read(UC_ARM64_REG_X0)
+            if tid in finished:
+                mu.reg_write(UC_ARM64_REG_X0, 0); mu.reg_write(UC_ARM64_REG_PC, lr)
+            else:
+                switch(resume_pc=addr)   # try again when this thread runs next
+    if macos and data_vmaddr is not None:
+        mu.mem_map(FAKE, 0x1000)
+        i = 0
+        while True:
+            w, = struct.unpack('<Q', bytes(mu.mem_read(data_vmaddr + 8 * i, 8)))
+            if not (w >> 63): break
+            mu.mem_write(data_vmaddr + 8 * i, struct.pack('<Q', FAKE + 16 * (w & 0xFFFFFF)))
+            i += 1
+            if ((w >> 51) & 0xFFF) == 0: break
+        mu.hook_add(UC_HOOK_CODE, bind_hook, None, FAKE, FAKE + 0x900)
 
     def cstr(addr):
         out = b''
@@ -134,6 +201,8 @@ def main():
             ln = (a[1] + 0xFFF) & ~0xFFF
             addr = mmap_next[0]; mmap_next[0] += ln + 0x1000
             mu.mem_map(addr, ln); r = addr
+        elif n == 172:  # getpid
+            r = 1
         elif n in (215, 98, 124, 226):  # munmap, futex (nothing ever waits: one thread), sched_yield, mprotect
             r = 0
         elif n in (93, 94):
@@ -157,6 +226,8 @@ def main():
             else:
                 mu.reg_write(UC_ARM64_REG_NZCV, nzcv & ~(1 << 29))
         mu.reg_write(UC_ARM64_REG_X0, r & ((1 << 64) - 1))
+        if macos and ctxs and bsd in (515, 93):
+            switch()   # a thread waiting for something lets the others run
 
     mu.hook_add(UC_HOOK_INTR, sysc)
     if macos:
@@ -170,6 +241,8 @@ def main():
         pc = mu.reg_read(UC_ARM64_REG_PC)
         sys.stderr.write("emulation error: %s at pc=%#x\n" % (e, pc))
         sys.exit(139)
+    if os.environ.get('A64_DEBUG'):
+        sys.stderr.write('stopped at pc=%#x lr=%#x sp=%#x thread=%d\n' % (mu.reg_read(UC_ARM64_REG_PC), mu.reg_read(UC_ARM64_REG_X30), mu.reg_read(UC_ARM64_REG_SP), cur['id']))
     sys.exit(state['exit'] if state['exit'] is not None else 0)
 
 main()

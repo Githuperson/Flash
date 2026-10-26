@@ -242,7 +242,7 @@ pub fn compile(mut m: Module, target: Target) -> Result<Vec<u8>, String> {
         }
     }
     // macOS arm64 programs that start threads import pthread functions through a GOT at the very start of the data segment
-    let mac_threads = target.os == Os::MacOs && target.arch == Arch::Aarch64 && m.funcs.iter().any(|f| f.name == "fl_thread_spawn");
+    let mac_threads = target.os == Os::MacOs && target.arch == Arch::Aarch64 && m.funcs.iter().any(|f| f.name == pseudo::THREAD_ENTRY);
     let mut data: Vec<u8> = if mac_threads { vec![0; 8 * pseudo::MAC_IMPORTS.len()] } else { vec![] };
     let mut bss: u64 = 0;
     for (i, d) in m.data.iter().enumerate() {

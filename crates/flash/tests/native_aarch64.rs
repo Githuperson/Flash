@@ -158,3 +158,18 @@ fn channels_and_atomics_run_on_aarch64() {
         }
     }
 }
+
+#[test]
+fn threads_run_on_apple_silicon_emulation() {
+    if !emulator_available() {
+        eprintln!("skipped: python3 with unicorn is not available");
+        return;
+    }
+    // The emulator runs the threads one at a time and switches when one waits (pthread_create,
+    // pthread_join and the bind table through which macOS programs import them are emulated).
+    let src = repo_root().join("tests/programs/threads.flash");
+    let expected = std::fs::read_to_string(src.with_extension("expected")).unwrap();
+    for release in [false, true] {
+        assert_eq!(emulate_for(&src, release, "aarch64-apple-darwin", &format!("a64-threads-{}", release)), expected, "release: {}", release);
+    }
+}
