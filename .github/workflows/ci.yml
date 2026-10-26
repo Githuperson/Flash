@@ -69,6 +69,12 @@ jobs:
           t.join()
           say("done")
           EOT
+          for mode in "" "--release"; do
+            "$GITHUB_WORKSPACE/target/debug/flash" build "$GITHUB_WORKSPACE/tests/programs/threads.flash" $mode -o full > /dev/null
+            echo "== full threads program $mode"
+            FLASH_RT_LEAKCHECK=1 perl -e 'alarm shift; exec @ARGV' 20 ./full
+            echo "exit=$?"
+          done
           for t in t1 t2 t3; do
             sed -i.bak 's/^          //' $t.flash
             "$GITHUB_WORKSPACE/target/debug/flash" build $t.flash -o $t > /dev/null || { echo "$t: build failed"; continue; }

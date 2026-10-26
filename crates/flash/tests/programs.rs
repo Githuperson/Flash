@@ -33,7 +33,7 @@ fn run_program(dir: &str, name: &str) {
         let (b, r) = build_and_run_extra(&src, release, backend, extra, &format!("{}-{}", name, mode), &[]);
         assert!(b.status.success(), "{} ({}) failed to compile:\n{}", name, mode, text(&b.stderr));
         let r = r.unwrap();
-        assert_eq!(text(&r.stdout), expected, "{} ({}): wrong output", name, mode);
+        assert_eq!(text(&r.stdout), expected, "{} ({}): wrong output (exit {:?}; stderr: {})", name, mode, r.status.code(), text(&r.stderr));
         assert_eq!(r.status.code(), Some(want_exit), "{} ({}): wrong exit code; stderr: {}", name, mode, text(&r.stderr));
         if want_exit == 0 {
             assert!(
