@@ -19,6 +19,7 @@ jobs:
           - { os: macos-latest,  flags: "",                           name: native }
           - { os: macos-latest,  flags: "--features legacy-backends", name: legacy }
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable

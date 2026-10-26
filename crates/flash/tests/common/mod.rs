@@ -73,16 +73,57 @@ pub fn build_and_run_extra(
     if !b.status.success() {
         return (b, None);
     }
-    let r = Command::new(&exe)
-        .args(run_args)
-        .env("FLASH_RT_LEAKCHECK", "1")
-        .env("FLASH_PLUGIN_QUIET", "1")
-        .output()
-        .expect("failed to run compiled program");
+    let r = run_with_timeout(Command::new(&exe).args(run_args).env("FLASH_RT_LEAKCHECK", "1").env("FLASH_PLUGIN_QUIET", "1"), 60);
     let _ = std::fs::remove_dir_all(&dir);
     (b, Some(r))
 }
 
 pub fn text(b: &[u8]) -> String {
     String::from_utf8_lossy(b).into_owned()
+}
+
+/// Run a program and collect its output; a program still running after `secs` seconds is killed and
+/// reported with exit code 124 (so a hang fails one test instead of blocking the whole run).
+pub fn run_with_timeout(cmd: &mut Command, secs: u64) -> Output {
+    use std::io::Read;
+    use std::process::Stdio;
+    let mut child = cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().expect("failed to run compiled program");
+    let mut out = child.stdout.take().unwrap();
+    let mut err = child.stderr.take().unwrap();
+    let t_out = std::thread::spawn(move || {
+        let mut v = vec![];
+        let _ = out.read_to_end(&mut v);
+        v
+    });
+    let t_err = std::thread::spawn(move || {
+        let mut v = vec![];
+        let _ = err.read_to_end(&mut v);
+        v
+    });
+    let start = std::time::Instant::now();
+    let mut timed_out = false;
+    let status = loop {
+        match child.try_wait().expect("wait failed") {
+            Some(s) => break s,
+            None if start.elapsed().as_secs() >= secs => {
+                timed_out = true;
+                let _ = child.kill();
+                break child.wait().expect("wait failed");
+            }
+            None => std::thread::sleep(std::time::Duration::from_millis(20)),
+        }
+    };
+    let stdout = t_out.join().unwrap_or_default();
+    let mut stderr = t_err.join().unwrap_or_default();
+    if timed_out {
+        stderr.extend_from_slice(format!("\n[test harness] killed after {} seconds (hang?)\n", secs).as_bytes());
+    }
+    #[cfg(unix)]
+    let status = if timed_out {
+        use std::os::unix::process::ExitStatusExt;
+        std::process::ExitStatus::from_raw(124 << 8)
+    } else {
+        status
+    };
+    Output { status, stdout, stderr }
 }
