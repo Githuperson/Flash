@@ -1,0 +1,86 @@
+# Maps and sets: insertion-ordered hash tables
+ages: Map[String, Int] = {}
+ages["ana"] = 31
+ages["bo"] = 27
+ages["cy"] = 45
+ages["bo"] = 28
+say(ages)
+say(len(ages), ages["bo"], ages.has("cy"), ages.has("zed"))
+say(ages.get("zed", -1), ages.get("ana", -1))
+ages.remove("ana")
+say(ages)
+ages["ana"] = 1
+say(ages.keys())
+say(ages.values())
+
+scores = {"x": 1.5, "y": 2.5}
+scores["z"] = scores["x"] + scores["y"]
+total = 0.0
+for k in scores:
+    total += scores[k]
+say(scores, total)
+
+# counting words
+text = "the cat and the hat and the bat"
+counts: Map[String, Int] = {}
+for w in split(text, " "):
+    counts[w] = counts.get(w, 0) + 1
+say(counts)
+
+# int keys, many entries, removal and growth
+squares: Map[Int, Int] = {}
+for i in 0..1000:
+    squares[i] = i * i
+for i in 0..1000:
+    if i % 3 != 0:
+        squares.remove(i)
+say(len(squares), squares[999], squares.has(998), squares.has(0))
+sum = 0
+for k in squares:
+    sum += squares[k]
+say(sum)
+
+# owned values and nested collections
+names: Map[Int, String] = {1: "one", 2: "two"}
+names[3] = "three"
+names[2] = "TWO"
+say(names)
+say(names.get(5, "none"), names.get(1, "none"))
+lists: Map[String, List[Int]] = {"a": [1, 2], "b": []}
+append(lists["a"], 3)
+say(lists)
+copy_of = copy(lists)
+append(copy_of["a"], 4)
+say(lists["a"], copy_of["a"])
+
+# sets
+seen: Set[Int] = {}
+for n in [3, 1, 4, 1, 5, 9, 2, 6, 5, 3, 5]:
+    seen.add(n)
+say(seen, len(seen), seen.has(4), seen.has(7))
+seen.remove(4)
+say(seen.items())
+words = {"b", "a", "b", "c"}
+say(words)
+for wd in words:
+    print(wd, "")
+say("")
+flags = {True, False}
+say(len(flags))
+many: Set[String] = {}
+for i in 0..200:
+    many.add(str(i % 50))
+say(len(many))
+many.clear()
+say(len(many), many)
+ages.clear()
+say(ages, len(ages))
+
+struct Team:
+    members: Map[String, Int]
+    tags: Set[String]
+
+t = Team(members={"ann": 1}, tags={"red"})
+t.members["bob"] = 2
+t.tags.add("blue")
+say(t.members, t.tags)

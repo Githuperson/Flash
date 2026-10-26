@@ -157,6 +157,7 @@ fn is_operand_end(t: &Tok) -> bool {
             | Tok::FStr(_)
             | Tok::RParen
             | Tok::RBracket
+            | Tok::RBrace
             | Tok::True
             | Tok::False
             | Tok::NoneLit
@@ -213,10 +214,10 @@ fn render_line(src: &str, toks: &[Token]) -> String {
             let prev_unary = matches!(prev, Tok::Minus | Tok::Plus | Tok::Tilde) && (i < 2 || !is_operand_end(&toks[i - 2].tok));
             let space = if matches!(
                 cur,
-                Tok::Comma | Tok::Colon | Tok::Dot | Tok::RParen | Tok::RBracket | Tok::Question | Tok::DotDot | Tok::DotDotEq
+                Tok::Comma | Tok::Colon | Tok::Dot | Tok::RParen | Tok::RBracket | Tok::RBrace | Tok::Question | Tok::DotDot | Tok::DotDotEq
             ) {
                 false
-            } else if matches!(prev, Tok::Dot | Tok::LParen | Tok::LBracket | Tok::Tilde | Tok::DotDot | Tok::DotDotEq) || prev_unary {
+            } else if matches!(prev, Tok::Dot | Tok::LParen | Tok::LBracket | Tok::LBrace | Tok::Tilde | Tok::DotDot | Tok::DotDotEq) || prev_unary {
                 false
             } else if nest > 0 && (matches!(cur, Tok::Assign) || matches!(prev, Tok::Assign)) {
                 // keyword argument: name=value (also when the value starts with a bracket)
@@ -244,8 +245,8 @@ fn render_line(src: &str, toks: &[Token]) -> String {
             }
         }
         match &t.tok {
-            Tok::LParen | Tok::LBracket => nest += 1,
-            Tok::RParen | Tok::RBracket => nest -= 1,
+            Tok::LParen | Tok::LBracket | Tok::LBrace => nest += 1,
+            Tok::RParen | Tok::RBracket | Tok::RBrace => nest -= 1,
             _ => {}
         }
         s.push_str(&text);

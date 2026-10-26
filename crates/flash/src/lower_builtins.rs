@@ -25,6 +25,7 @@ impl<'a, 'p> FnLower<'a, 'p> {
             Type::List(et) => self.print_list(v, et),
             Type::Struct(sid) => self.print_tuple(v, *sid),
             Type::Enum(eid) => self.print_enum(v, *eid),
+            t @ (Type::Map(..) | Type::Set(_)) => self.print_map(t, v),
             t => unreachable!("print {:?}", t),
         }
     }
@@ -73,7 +74,7 @@ impl<'a, 'p> FnLower<'a, 'p> {
         lit(self, close);
     }
 
-    fn print_lit(&mut self, text: &str) {
+    pub(super) fn print_lit(&mut self, text: &str) {
         let d = self.lw.string_data(text);
         let p = self.vreg(Ty::I64);
         self.emit(Inst::DataAddr { dst: p, data: d });
@@ -81,7 +82,7 @@ impl<'a, 'p> FnLower<'a, 'p> {
     }
 
     /// Print one element of a list or tuple (strings are quoted).
-    fn print_elem(&mut self, ev: VReg, et: &Type) {
+    pub(super) fn print_elem(&mut self, ev: VReg, et: &Type) {
         match et {
             Type::Int(it) => {
                 let w = self.widen(ev, *it);
@@ -101,6 +102,7 @@ impl<'a, 'p> FnLower<'a, 'p> {
             Type::List(inner) => self.print_list(ev, inner),
             Type::Struct(sid) => self.print_tuple(ev, *sid),
             Type::Enum(eid) => self.print_enum(ev, *eid),
+            t @ (Type::Map(..) | Type::Set(_)) => self.print_map(t, ev),
             _ => {
                 self.rt("fl_print_none", &[]);
             }
@@ -199,6 +201,9 @@ impl<'a, 'p> FnLower<'a, 'p> {
                         self.rtv("fl_str_from_none", &[])
                     }
                 }
+            }
+            B::MapHas | B::MapGet | B::MapRemove | B::MapKeys | B::MapValues | B::MapClear | B::SetAdd | B::SetHas | B::SetRemove | B::SetItems | B::SetClear => {
+                self.collection_builtin(b, args, e)
             }
             B::Len => {
                 let v = self.borrow(&args[0]);

@@ -596,6 +596,9 @@ fn build_legacy(
     let out = out.to_path_buf();
     let cache_entry = cache_entry.map(|p| p.to_path_buf());
     let module = lower_and_optimise(&fe.program, opts.release);
+    if module.externs.iter().any(|e| e.name.starts_with("fl_map_") || e.name == "fl_panic_key") {
+        return Err("Map and Set are only supported by Flash's own back end (the default); the Cranelift/LLVM back ends do not have them.\n".into());
+    }
     if opts.emit_ir {
         println!("{}", module);
     }

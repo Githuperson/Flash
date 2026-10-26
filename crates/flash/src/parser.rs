@@ -939,6 +939,38 @@ impl<'a> Parser<'a> {
                 self.expect(Tok::RParen, "')' to close the parenthesis")?;
                 return Ok(e);
             }
+            Tok::LBrace => {
+                self.bump();
+                if self.at(&Tok::RBrace) {
+                    let end = self.bump().span;
+                    return Ok(Expr { kind: ExprKind::Map(vec![]), span: sp.to(end) });
+                }
+                let first = self.expr()?;
+                if self.eat(&Tok::Colon) {
+                    let v = self.expr()?;
+                    let mut pairs = vec![(first, v)];
+                    while self.eat(&Tok::Comma) {
+                        if self.at(&Tok::RBrace) {
+                            break;
+                        }
+                        let k = self.expr()?;
+                        self.expect(Tok::Colon, "':' and a value after the key")?;
+                        let v = self.expr()?;
+                        pairs.push((k, v));
+                    }
+                    let end = self.expect(Tok::RBrace, "'}' to close the map")?.span;
+                    return Ok(Expr { kind: ExprKind::Map(pairs), span: sp.to(end) });
+                }
+                let mut elems = vec![first];
+                while self.eat(&Tok::Comma) {
+                    if self.at(&Tok::RBrace) {
+                        break;
+                    }
+                    elems.push(self.expr()?);
+                }
+                let end = self.expect(Tok::RBrace, "'}' to close the set")?.span;
+                return Ok(Expr { kind: ExprKind::Set(elems), span: sp.to(end) });
+            }
             Tok::LBracket => {
                 self.bump();
                 let mut elems = vec![];

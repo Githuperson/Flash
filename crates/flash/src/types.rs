@@ -63,6 +63,10 @@ pub enum Type {
     Enum(EnumId),
     /// `Result[T]`: either a value of type T or an error message.
     Result(Box<Type>),
+    /// `Map[K, V]`: an insertion-ordered hash map.
+    Map(Box<Type>, Box<Type>),
+    /// `Set[T]`: an insertion-ordered hash set.
+    Set(Box<Type>),
     /// Poison type that suppresses follow-up errors.
     Error,
 }
@@ -87,7 +91,7 @@ impl Type {
             Type::Int(i) => (i.bits / 8) as u32,
             Type::Float => 8,
             Type::Bool | Type::None | Type::Error => 1,
-            Type::Str | Type::List(_) | Type::Struct(_) | Type::Enum(_) | Type::Result(_) => 8,
+            Type::Str | Type::List(_) | Type::Struct(_) | Type::Enum(_) | Type::Result(_) | Type::Map(..) | Type::Set(_) => 8,
         }
     }
 }
@@ -167,6 +171,8 @@ pub fn display(t: &Type, structs: &[StructInfo], enums: &[EnumInfo]) -> String {
         Type::Struct(id) => structs[*id].name.clone(),
         Type::Enum(id) => enums[*id].name.clone(),
         Type::Result(e) => format!("Result[{}]", display(e, structs, enums)),
+        Type::Map(k, v) => format!("Map[{}, {}]", display(k, structs, enums), display(v, structs, enums)),
+        Type::Set(e) => format!("Set[{}]", display(e, structs, enums)),
         Type::Error => "<error>".into(),
     }
 }

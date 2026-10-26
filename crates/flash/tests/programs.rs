@@ -13,7 +13,8 @@ fn run_program(dir: &str, name: &str) {
     // dev and release with the native back end; with `--features legacy-backends` also the
     // Cranelift back end (system linker) and, when clang is installed, LLVM.
     let mut configs: Vec<(bool, Option<&str>, &[&str])> = vec![(false, None, &[]), (true, None, &[])];
-    if cfg!(feature = "legacy-backends") {
+    // (Map and Set exist only in Flash's own back end.)
+    if cfg!(feature = "legacy-backends") && name != "maps" {
         configs.push((false, None, &["--linker", "system"]));
         configs.push((true, None, &["--linker", "system"]));
         if clang_available() {
@@ -54,7 +55,7 @@ macro_rules! programs {
 
 mod tests_dir {
     use super::*;
-    programs!("tests/programs": integers, const_division, methods, tuples, enums, strings, scopes, results, ownership, ownership_flow, generics, modules, tree);
+    programs!("tests/programs": integers, const_division, methods, tuples, enums, maps, strings, scopes, results, ownership, ownership_flow, generics, modules, tree);
 }
 
 mod examples_dir {

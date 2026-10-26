@@ -62,7 +62,7 @@ fn examples_and_test_programs_run_on_windows() {
     for name in ["hello", "arithmetic", "conditions", "functions", "lists", "loops", "structs"] {
         check_against_expected(&repo_root().join("examples").join(format!("{}.flash", name)), name);
     }
-    for name in ["integers", "strings", "ownership", "generics", "const_division", "methods", "tuples", "enums"] {
+    for name in ["integers", "strings", "ownership", "generics", "const_division", "methods", "tuples", "enums", "maps"] {
         check_against_expected(&repo_root().join("tests/programs").join(format!("{}.flash", name)), name);
     }
 }

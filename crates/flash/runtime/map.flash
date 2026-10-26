@@ -1,0 +1,253 @@
+# Flash runtime library, part 4b: hash maps and sets (Map[K, V] and Set[T]).
+#
+# An insertion-ordered table, like a Python dict: the entries sit in dense arrays in the order
+# they were added, and a separate open-addressing index table finds an entry from its key.
+# Keys are Int-like values (stored widened to 64 bits) or Strings (the map keeps its own copy of
+# each key); values are 8-byte slots (Sets have none). Removing an entry only marks it dead; the
+# arrays are compacted when they fill up.
+#
+# Header (72 bytes):
+#    0 live entries         8 entries used (live + dead)    16 entry capacity
+#   24 keys (8 bytes each) 32 values (8 bytes each, 0 for a Set)   40 live flags (1 byte each)
+#   48 index table (8 bytes each: entry number + 1, 0 = empty)     56 index capacity (2 * capacity)
+#   64 1 if the table has values
+# `kind` is 0 for Int-like keys and 1 for String keys.
+
+fn fl_panic_key():
+    die_begin()
+    err_str(__str("key not found in map"))
+    die_end()
+
+fn fl_map_new(has_vals: Int) -> Int:
+    m = fl_alloc(72)
+    i = 0
+    while i < 72:
+        __poke(m, i, 0)
+        i += 8
+    __poke(m, 64, has_vals)
+    return m
+
+fn map_zero(p: Int, bytes: Int):
+    i = 0
+    while i + 8 <= bytes:
+        __poke(p, i, 0)
+        i += 8
+    while i < bytes:
+        __poke8(p, i, 0)
+        i += 1
+
+fn map_hash(kind: Int, key: Int) -> Int:
+    if kind == 0:
+        h = key * -7046029254386353131
+        return h ^ ((h >> 32) & 4294967295)
+    h = -3750763034362895579
+    n = __peek(key, 0)
+    i = 0
+    while i < n:
+        h = (h ^ __peek8(key, 16 + i)) * 1099511628211
+        i += 1
+    return h ^ ((h >> 29) & 8589934591)
+
+fn map_key_eq(kind: Int, a: Int, b: Int) -> Bool:
+    if kind == 0:
+        return a == b
+    return fl_str_eq(a, b)
+
+# Entry number of `key`, or -1.
+fn fl_map_find(m: Int, kind: Int, key: Int) -> Int:
+    icap = __peek(m, 56)
+    if icap == 0:
+        return -1
+    mask = icap - 1
+    keys = __peek(m, 24)
+    live = __peek(m, 40)
+    idx = __peek(m, 48)
+    j = map_hash(kind, key) & mask
+    while True:
+        e = __peek(idx, j * 8)
+        if e == 0:
+            return -1
+        e1 = e - 1
+        if __peek8(live, e1) == 1 and map_key_eq(kind, __peek(keys, e1 * 8), key):
+            return e1
+        j = (j + 1) & mask
+
+# Moves the live entries into fresh arrays of `newcap` entries.
+fn map_rebuild(m: Int, kind: Int, newcap: Int):
+    has_vals = __peek(m, 64)
+    ocap = __peek(m, 16)
+    on = __peek(m, 8)
+    okeys = __peek(m, 24)
+    ovals = __peek(m, 32)
+    olive = __peek(m, 40)
+    oidx = __peek(m, 48)
+    oicap = __peek(m, 56)
+    nkeys = fl_alloc(newcap * 8)
+    nvals = 0
+    if has_vals != 0:
+        nvals = fl_alloc(newcap * 8)
+    nlive = fl_alloc(newcap)
+    map_zero(nlive, newcap)
+    nicap = newcap * 2
+    nidx = fl_alloc(nicap * 8)
+    map_zero(nidx, nicap * 8)
+    mask = nicap - 1
+    cnt = 0
+    i = 0
+    while i < on:
+        if __peek8(olive, i) == 1:
+            k = __peek(okeys, i * 8)
+            __poke(nkeys, cnt * 8, k)
+            if has_vals != 0:
+                __poke(nvals, cnt * 8, __peek(ovals, i * 8))
+            __poke8(nlive, cnt, 1)
+            j = map_hash(kind, k) & mask
+            while __peek(nidx, j * 8) != 0:
+                j = (j + 1) & mask
+            __poke(nidx, j * 8, cnt + 1)
+            cnt += 1
+        i += 1
+    if ocap > 0:
+        fl_free(okeys, ocap * 8)
+        if has_vals != 0:
+            fl_free(ovals, ocap * 8)
+        fl_free(olive, ocap)
+        fl_free(oidx, oicap * 8)
+    __poke(m, 8, cnt)
+    __poke(m, 16, newcap)
+    __poke(m, 24, nkeys)
+    __poke(m, 32, nvals)
+    __poke(m, 40, nlive)
+    __poke(m, 48, nidx)
+    __poke(m, 56, nicap)
+
+# Adds `key` (which must not be in the table yet) and returns its entry number.
+fn fl_map_insert(m: Int, kind: Int, key: Int) -> Int:
+    n = __peek(m, 8)
+    cap = __peek(m, 16)
+    if n == cap:
+        newcap = 8
+        if cap > 0:
+            newcap = cap
+            if __peek(m, 0) * 2 >= cap:
+                newcap = cap * 2
+        map_rebuild(m, kind, newcap)
+        n = __peek(m, 8)
+    k = key
+    if kind == 1:
+        k = fl_str_clone(key)
+    __poke(__peek(m, 24), n * 8, k)
+    __poke8(__peek(m, 40), n, 1)
+    mask = __peek(m, 56) - 1
+    idx = __peek(m, 48)
+    j = map_hash(kind, key) & mask
+    while __peek(idx, j * 8) != 0:
+        j = (j + 1) & mask
+    __poke(idx, j * 8, n + 1)
+    __poke(m, 8, n + 1)
+    __poke(m, 0, __peek(m, 0) + 1)
+    return n
+
+# Marks entry `e` dead (the caller has already released its value).
+fn fl_map_remove(m: Int, kind: Int, e: Int):
+    if kind == 1:
+        fl_str_drop(__peek(__peek(m, 24), e * 8))
+    __poke8(__peek(m, 40), e, 0)
+    __poke(m, 0, __peek(m, 0) - 1)
+
+# Removes every entry (the caller has already released the values).
+fn fl_map_clear(m: Int, kind: Int):
+    n = __peek(m, 8)
+    live = __peek(m, 40)
+    keys = __peek(m, 24)
+    i = 0
+    while i < n:
+        if __peek8(live, i) == 1:
+            if kind == 1:
+                fl_str_drop(__peek(keys, i * 8))
+            __poke8(live, i, 0)
+        i += 1
+    if __peek(m, 56) > 0:
+        map_zero(__peek(m, 48), __peek(m, 56) * 8)
+    __poke(m, 0, 0)
+    __poke(m, 8, 0)
+
+# Frees the table (the caller has already released the values).
+fn fl_map_free(m: Int, kind: Int):
+    cap = __peek(m, 16)
+    if cap > 0:
+        n = __peek(m, 8)
+        keys = __peek(m, 24)
+        live = __peek(m, 40)
+        if kind == 1:
+            i = 0
+            while i < n:
+                if __peek8(live, i) == 1:
+                    fl_str_drop(__peek(keys, i * 8))
+                i += 1
+        fl_free(keys, cap * 8)
+        if __peek(m, 64) != 0:
+            fl_free(__peek(m, 32), cap * 8)
+        fl_free(live, cap)
+        fl_free(__peek(m, 48), __peek(m, 56) * 8)
+    fl_free(m, 72)
+
+# A new table with the same entries (keys copied; the value slots are copied as they are, so the
+# caller deep-copies owned values afterwards).
+fn fl_map_clone_shallow(m: Int, kind: Int) -> Int:
+    has_vals = __peek(m, 64)
+    c = fl_map_new(has_vals)
+    cap = __peek(m, 16)
+    if cap == 0:
+        return c
+    map_rebuild(c, kind, cap)
+    n = __peek(m, 8)
+    keys = __peek(m, 24)
+    vals = __peek(m, 32)
+    live = __peek(m, 40)
+    i = 0
+    while i < n:
+        if __peek8(live, i) == 1:
+            e = fl_map_insert(c, kind, __peek(keys, i * 8))
+            if has_vals != 0:
+                __poke(__peek(c, 32), e * 8, __peek(vals, i * 8))
+        i += 1
+    return c
+
+fn map_store(slot: Int, stride: Int, v: Int):
+    if stride == 8:
+        __poke(slot, 0, v)
+        return
+    b = 0
+    while b < stride:
+        __poke8(slot, b, (v >> (8 * b)) & 255)
+        b += 1
+
+# The keys as a new List whose elements are `stride` bytes wide.
+fn fl_map_keys(m: Int, kind: Int, stride: Int) -> Int:
+    l = fl_list_new(__peek(m, 0), stride)
+    n = __peek(m, 8)
+    keys = __peek(m, 24)
+    live = __peek(m, 40)
+    i = 0
+    while i < n:
+        if __peek8(live, i) == 1:
+            k = __peek(keys, i * 8)
+            if kind == 1:
+                k = fl_str_clone(k)
+            map_store(fl_list_push_slot(l, stride), stride, k)
+        i += 1
+    return l
+
+# The values as a new List (copied as they are; the caller deep-copies owned values).
+fn fl_map_values(m: Int, stride: Int) -> Int:
+    l = fl_list_new(__peek(m, 0), stride)
+    n = __peek(m, 8)
+    vals = __peek(m, 32)
+    live = __peek(m, 40)
+    i = 0
+    while i < n:
+        if __peek8(live, i) == 1:
+            map_store(fl_list_push_slot(l, stride), stride, __peek(vals, i * 8))
+        i += 1
+    return l

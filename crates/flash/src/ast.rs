@@ -301,4 +301,8 @@ pub enum ExprKind {
     Try(Box<Expr>),
     /// `(a, b)` — a tuple with at least two elements (or one with a trailing comma).
     Tuple(Vec<Expr>),
+    /// `{k: v, ...}` (an empty `{}` is a Map unless a Set is expected).
+    Map(Vec<(Expr, Expr)>),
+    /// `{a, b, ...}`
+    Set(Vec<Expr>),
 }

@@ -32,6 +32,11 @@ struct Resolver<'a> {
     loop_depth: usize,
 }
 
+/// Names of the Map / Set methods (`m.has(k)`, `s.add(x)`, ...); they are methods, not reserved function names.
+fn is_collection_method(name: &str) -> bool {
+    matches!(name, "has" | "get" | "remove" | "keys" | "values" | "clear" | "add" | "items")
+}
+
 pub fn resolve(mods: &[LoadedModule], plugins: &[PluginBinding], diags: &mut Diagnostics) {
     let mut r = Resolver { mods, plugins, diags, fns: vec![], structs: HashMap::new(), methods: HashSet::new(), enums: HashMap::new(), variants: HashMap::new(), cur: 0, scopes: vec![], loop_depth: 0 };
     r.run();
@@ -205,7 +210,7 @@ impl<'a> Resolver<'a> {
     fn type_expr(&mut self, t: &TypeExpr) {
         use crate::types::IntTy;
         let known = IntTy::from_name(&t.name).is_some()
-            || matches!(t.name.as_str(), "Float" | "f64" | "Bool" | "String" | "None" | "List" | "Result" | "Tuple")
+            || matches!(t.name.as_str(), "Float" | "f64" | "Bool" | "String" | "None" | "List" | "Result" | "Tuple" | "Map" | "Set")
             || self.structs.contains_key(&t.name);
         if !known {
             let cands: Vec<&str> = ["Int", "Float", "Bool", "String", "None", "List", "Result", "i32", "u8"]
@@ -417,7 +422,7 @@ impl<'a> Resolver<'a> {
                         if let ExprKind::Name(m) = &base.kind {
                             if self.declared(m) {
                                 // method-call syntax on a variable
-                                if !(self.fns[self.cur].contains(name) || is_builtin(name) || self.is_method_name(name)) {
+                                if !(self.fns[self.cur].contains(name) || is_builtin(name) || self.is_method_name(name) || is_collection_method(name)) {
                                     self.unknown_name(name, *name_span, true);
                                 }
                             } else if self.enums.contains_key(m) && self.enums[m].iter().any(|v| v == name) {
@@ -454,7 +459,7 @@ impl<'a> Resolver<'a> {
                             }
                         } else {
                             self.expr(base);
-                            if !(self.fns[self.cur].contains(name) || is_builtin(name) || self.is_method_name(name)) {
+                            if !(self.fns[self.cur].contains(name) || is_builtin(name) || self.is_method_name(name) || is_collection_method(name)) {
                                 self.unknown_name(name, *name_span, true);
                             }
                         }
@@ -484,9 +489,15 @@ impl<'a> Resolver<'a> {
                 self.expr(base);
                 self.expr(index);
             }
-            ExprKind::List(es) | ExprKind::Tuple(es) => {
+            ExprKind::List(es) | ExprKind::Tuple(es) | ExprKind::Set(es) => {
                 for x in es {
                     self.expr(x);
+                }
+            }
+            ExprKind::Map(pairs) => {
+                for (k, v) in pairs {
+                    self.expr(k);
+                    self.expr(v);
                 }
             }
             ExprKind::Try(a) => self.expr(a),

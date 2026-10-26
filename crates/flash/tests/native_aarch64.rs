@@ -133,7 +133,7 @@ fn language_features_run_on_aarch64() {
         eprintln!("skipped: python3 with unicorn is not available");
         return;
     }
-    for name in ["methods", "tuples", "enums"] {
+    for name in ["methods", "tuples", "enums", "maps"] {
         let src = repo_root().join("tests/programs").join(format!("{}.flash", name));
         let expected = std::fs::read_to_string(src.with_extension("expected")).unwrap();
         for target in TARGETS {

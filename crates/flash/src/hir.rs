@@ -81,6 +81,18 @@ pub enum Builtin {
     Join,
     Find,
     Substr,
+    // Map and Set methods: the receiver is the first argument
+    MapHas,
+    MapGet,
+    MapRemove,
+    MapKeys,
+    MapValues,
+    MapClear,
+    SetAdd,
+    SetHas,
+    SetRemove,
+    SetItems,
+    SetClear,
     ByteAt,
     ParseInt,
     ParseFloat,
@@ -138,6 +150,10 @@ pub enum HKind {
         args: Vec<HExpr>,
     },
     Struct(Vec<HExpr>),
+    /// A map literal, as (key, value) pairs.
+    MapLit(Vec<(HExpr, HExpr)>),
+    /// A set literal.
+    SetLit(Vec<HExpr>),
     /// A new enum value: variant `variant` of enum `enum_id` with its payload.
     Variant {
         enum_id: usize,

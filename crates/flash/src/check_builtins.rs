@@ -46,11 +46,13 @@ impl<'a> Checker<'a> {
                 Type::List(e) => ok(e, structs, enums, depth + 1),
                 Type::Struct(sid) => structs[*sid].tuple && structs[*sid].fields.iter().all(|(_, f)| ok(f, structs, enums, depth + 1)),
                 Type::Enum(eid) => enums[*eid].variants.iter().all(|v| v.fields.iter().all(|(_, f)| ok(f, structs, enums, depth + 1))),
+                Type::Map(k, v) => ok(k, structs, enums, depth + 1) && ok(v, structs, enums, depth + 1),
+                Type::Set(t) => ok(t, structs, enums, depth + 1),
                 _ => false,
             }
         }
         match &h.ty {
-            t if ok(t, &self.structs, &self.enums, 0) && (name != "str" || !matches!(t, Type::List(_) | Type::Struct(_) | Type::Enum(_))) => Ok(()),
+            t if ok(t, &self.structs, &self.enums, 0) && (name != "str" || !matches!(t, Type::List(_) | Type::Struct(_) | Type::Enum(_) | Type::Map(..) | Type::Set(_))) => Ok(()),
             _ => {
                 let tn = self.tn(&h.ty);
                 self.fail(
@@ -172,9 +174,9 @@ impl<'a> Checker<'a> {
             "len" => {
                 self.nargs(name, args, 1, span)?;
                 let h = self.expr(args[0], None, Ctx::Borrow)?;
-                if !matches!(h.ty, Type::Str | Type::List(_)) {
+                if !matches!(h.ty, Type::Str | Type::List(_) | Type::Map(..) | Type::Set(_)) {
                     let tn = self.tn(&h.ty);
-                    return self.fail(Diagnostic::error(args[0].span, format!("len() works on String and List, but this is {}.", tn)));
+                    return self.fail(Diagnostic::error(args[0].span, format!("len() works on String, List, Map and Set, but this is {}.", tn)));
                 }
                 Ok(self.mk(B::Len, vec![h], Type::Int(INT), span))
             }

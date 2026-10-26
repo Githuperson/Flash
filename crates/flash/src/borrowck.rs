@@ -274,9 +274,15 @@ impl<'a> Ck<'a> {
                 self.expr(b);
                 self.state = join(before, self.state.take());
             }
-            HKind::Struct(args) | HKind::List(args) | HKind::Variant { fields: args, .. } => {
+            HKind::Struct(args) | HKind::List(args) | HKind::SetLit(args) | HKind::Variant { fields: args, .. } => {
                 for a in args {
                     self.expr(a);
+                }
+            }
+            HKind::MapLit(pairs) => {
+                for (k, v) in pairs {
+                    self.expr(k);
+                    self.expr(v);
                 }
             }
             HKind::Builtin(b, args) => {

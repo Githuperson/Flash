@@ -13,6 +13,7 @@ pub fn runtime_source() -> String {
         include_str!("../../runtime/win.flash"),
         include_str!("../../runtime/sys.flash"),
         include_str!("../../runtime/text.flash"),
+        include_str!("../../runtime/map.flash"),
         include_str!("../../runtime/float.flash"),
         include_str!("../../runtime/math.flash"),
         include_str!("../../runtime/io.flash"),

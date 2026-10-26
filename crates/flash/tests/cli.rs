@@ -83,6 +83,7 @@ fn runtime_errors_exit_with_code_101_and_a_message() {
         ("xs: List[Int] = []\nsay(pop(xs))\n", "pop", "pop() from an empty list"),
         ("assert(1 > 2, \"nope\")\n", "assert", "Assertion failed: nope"),
         ("say(unwrap(parse_int(\"x\")))\n", "unwrap", "unwrap() on an error"),
+        ("m = {\"a\": 1}\nk = \"b\"\nsay(m[k])\n", "missing key", "key not found in map"),
     ] {
         let src = dir.join("p.flash");
         std::fs::write(&src, code).unwrap();

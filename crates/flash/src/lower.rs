@@ -201,9 +201,10 @@ fn body_mutates(stmts: &[HStmt], xs: LocalId) -> bool {
                 (matches!(b, Builtin::Append | Builtin::Pop) && args.first().and_then(root) == Some(xs)) || args.iter().any(|a| expr(a, xs))
             }
             HKind::Call(_, args) => args.iter().any(|a| root(a) == Some(xs) && !a.ty.is_copy() || expr(a, xs)),
-            HKind::PluginCall { args, .. } | HKind::ExternCall { args, .. } | HKind::Struct(args) | HKind::List(args) | HKind::Variant { fields: args, .. } => {
+            HKind::PluginCall { args, .. } | HKind::ExternCall { args, .. } | HKind::Struct(args) | HKind::List(args) | HKind::SetLit(args) | HKind::Variant { fields: args, .. } => {
                 args.iter().any(|a| expr(a, xs))
             }
+            HKind::MapLit(pairs) => pairs.iter().any(|(k, v)| expr(k, xs) || expr(v, xs)),
             HKind::Unary(_, a) | HKind::Cast(a) | HKind::Try(a) | HKind::Field(a, _) | HKind::EnumTag(a) | HKind::EnumField(a, _, _) => expr(a, xs),
             HKind::Binary(_, a, b) | HKind::Logic(_, a, b) | HKind::Index(a, b) => expr(a, xs) || expr(b, xs),
             _ => false,
@@ -247,10 +248,17 @@ fn collect_moves_expr(e: &HExpr, out: &mut HashSet<LocalId>) {
         | HKind::Struct(args)
         | HKind::Variant { fields: args, .. }
         | HKind::List(args)
+        | HKind::SetLit(args)
         | HKind::PluginCall { args, .. }
         | HKind::ExternCall { args, .. } => {
             for a in args {
                 collect_moves_expr(a, out);
+            }
+        }
+        HKind::MapLit(pairs) => {
+            for (k, v) in pairs {
+                collect_moves_expr(k, out);
+                collect_moves_expr(v, out);
             }
         }
         _ => {}
@@ -566,6 +574,7 @@ impl<'a, 'p> FnLower<'a, 'p> {
                 let sz = self.iconst(Ty::I64, si.size as i64);
                 self.rt("fl_free", &[p, sz]);
             }
+            Type::Map(..) | Type::Set(_) => self.drop_map(ty, p),
             Type::Enum(eid) => {
                 let info = self.lw.prog.enums[*eid].clone();
                 let tag = self.load(Ty::I64, p, 0);
@@ -693,6 +702,7 @@ impl<'a, 'p> FnLower<'a, 'p> {
                 }
                 new
             }
+            Type::Map(..) | Type::Set(_) => self.clone_map(ty, p),
             Type::Enum(eid) => {
                 let info = self.lw.prog.enums[*eid].clone();
                 let sz = self.iconst(Ty::I64, info.size as i64);
@@ -1030,6 +1040,12 @@ impl<'a, 'p> FnLower<'a, 'p> {
                 }
                 self.store_t(b, off, v, tf);
             }
+            HKind::Index(base, idx) if matches!(base.ty, Type::Map(..)) => {
+                let Type::Map(kt, vt) = &base.ty else { unreachable!() };
+                let m = self.borrow(base);
+                let key = self.map_key(kt, idx);
+                self.map_put(m, kt, vt, key, v);
+            }
             HKind::Index(base, idx) => {
                 let addr = self.elem_addr(base, idx);
                 let te = self.tag_elem(&place.ty);
@@ -1164,10 +1180,12 @@ impl<'a, 'p> FnLower<'a, 'p> {
                 self.load_t(ir_ty(&si.fields[*idx].1), b, si.offsets[*idx] as i32, tf)
             }
             HKind::Index(base, idx) => {
-                let addr = self.elem_addr(base, idx);
+                let addr = if matches!(base.ty, Type::Map(..)) { self.map_index_addr(base, idx) } else { self.elem_addr(base, idx) };
                 let te = self.tag_elem(&e.ty);
                 self.load_t(ir_ty(&e.ty), addr, 0, te)
             }
+            HKind::MapLit(pairs) => self.map_lit(pairs, &e.ty),
+            HKind::SetLit(elems) => self.set_lit(elems, &e.ty),
             HKind::EnumTag(inner) => {
                 let p = self.borrow(inner);
                 self.load(Ty::I64, p, 0)
@@ -1620,3 +1638,5 @@ impl<'a, 'p> FnLower<'a, 'p> {
 
 #[path = "lower_builtins.rs"]
 mod lower_builtins;
+#[path = "lower_collections.rs"]
+mod lower_collections;

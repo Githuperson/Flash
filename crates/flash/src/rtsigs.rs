@@ -83,6 +83,21 @@ pub const RT_FUNCS: &[(&str, &[Ty], Option<Ty>)] = &[
     ("fl_plugin_call", &[I, I, I, I], Some(I)),
 ];
 
+/// Runtime functions that only exist in the native back end's Flash-language runtime (the legacy
+/// Rust runtime has no maps or sets).
+pub const NATIVE_ONLY_FUNCS: &[(&str, &[Ty], Option<Ty>)] = &[
+    ("fl_panic_key", &[], None),
+    ("fl_map_new", &[I], Some(I)),
+    ("fl_map_find", &[I, I, I], Some(I)),
+    ("fl_map_insert", &[I, I, I], Some(I)),
+    ("fl_map_remove", &[I, I, I], None),
+    ("fl_map_clear", &[I, I], None),
+    ("fl_map_free", &[I, I], None),
+    ("fl_map_clone_shallow", &[I, I], Some(I)),
+    ("fl_map_keys", &[I, I, I], Some(I)),
+    ("fl_map_values", &[I, I], Some(I)),
+];
+
 pub fn lookup(name: &str) -> Option<(&'static [Ty], Option<Ty>)> {
-    RT_FUNCS.iter().find(|(n, _, _)| *n == name).map(|(_, p, r)| (*p, *r))
+    RT_FUNCS.iter().chain(NATIVE_ONLY_FUNCS).find(|(n, _, _)| *n == name).map(|(_, p, r)| (*p, *r))
 }

@@ -53,6 +53,8 @@ pub enum Tok {
     LParen,
     RParen,
     LBracket,
+    LBrace,
+    RBrace,
     RBracket,
     Comma,
     Colon,
@@ -133,6 +135,8 @@ impl Tok {
             Tok::LParen => "(",
             Tok::RParen => ")",
             Tok::LBracket => "[",
+            Tok::LBrace => "{",
+            Tok::RBrace => "}",
             Tok::RBracket => "]",
             Tok::Comma => ",",
             Tok::Colon => ":",
@@ -598,6 +602,14 @@ impl<'a> Lexer<'a> {
             (b']', _, _) => {
                 self.depth = (self.depth - 1).max(0);
                 (Tok::RBracket, 1)
+            }
+            (b'{', _, _) => {
+                self.depth += 1;
+                (Tok::LBrace, 1)
+            }
+            (b'}', _, _) => {
+                self.depth = (self.depth - 1).max(0);
+                (Tok::RBrace, 1)
             }
             (b',', _, _) => (Tok::Comma, 1),
             (b':', _, _) => (Tok::Colon, 1),

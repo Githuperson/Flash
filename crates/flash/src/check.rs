@@ -343,6 +343,29 @@ impl<'a> Checker<'a> {
                 let inner = self.resolve_type(&t.args[0])?;
                 Ok(if t.name == "List" { Type::List(Box::new(inner)) } else { Type::Result(Box::new(inner)) })
             }
+            "Map" | "Set" => {
+                let want = if t.name == "Map" { 2 } else { 1 };
+                if t.args.len() != want {
+                    let example = if want == 2 { "Map[String, Int]" } else { "Set[Int]" };
+                    return self.fail(
+                        Diagnostic::error(t.span, format!("{} needs {} type argument(s).", t.name, want)).help(format!("For example: {}", example)),
+                    );
+                }
+                let key = self.resolve_type(&t.args[0])?;
+                if !matches!(key, Type::Int(_) | Type::Bool | Type::Str) {
+                    let tn = self.tn(&key);
+                    return self.fail(
+                        Diagnostic::error(t.args[0].span, format!("{} keys must be integers, Bool or String, but this is {}.", t.name, tn))
+                            .help("Keys are compared and hashed by value; use an Int id or a String name as the key."),
+                    );
+                }
+                if want == 2 {
+                    let val = self.resolve_type(&t.args[1])?;
+                    Ok(Type::Map(Box::new(key), Box::new(val)))
+                } else {
+                    Ok(Type::Set(Box::new(key)))
+                }
+            }
             "Tuple" => {
                 let mut elems = vec![];
                 for a in &t.args {
@@ -363,6 +386,175 @@ impl<'a> Checker<'a> {
                 self.fail(Diagnostic::error(t.span, format!("I don't know a type called '{}'.", n)))
             }
         }
+    }
+
+    fn mk_builtin(&self, b: Builtin, args: Vec<HExpr>, ty: Type, span: Span) -> HExpr {
+        he(HKind::Builtin(b, args), ty, span)
+    }
+
+    fn map_lit(&mut self, pairs: &[(Expr, Expr)], expected: Option<&Type>, span: Span) -> R<HExpr> {
+        if pairs.is_empty() {
+            return match expected {
+                Some(t @ Type::Map(..)) => Ok(he(HKind::MapLit(vec![]), t.clone(), span)),
+                Some(t @ Type::Set(_)) => Ok(he(HKind::SetLit(vec![]), t.clone(), span)),
+                _ => self.fail(
+                    Diagnostic::error(span, "I can't tell what kind of collection an empty `{}` is.")
+                        .help("Give it a type: `m: Map[String, Int] = {}` or `s: Set[Int] = {}`."),
+                ),
+            };
+        }
+        let hint = match expected {
+            Some(Type::Map(k, v)) => Some(((**k).clone(), (**v).clone())),
+            _ => None,
+        };
+        let mut hs: Vec<(HExpr, HExpr)> = vec![];
+        let mut failed = false;
+        for (ke, ve) in pairs {
+            let (kh, vh) = match (&hint, hs.first()) {
+                (Some((k, v)), _) => (Some(k.clone()), Some(v.clone())),
+                (None, Some((k0, v0))) => (Some(k0.ty.clone()), Some(v0.ty.clone())),
+                _ => (None, None),
+            };
+            let k = self.expr(ke, kh.as_ref(), Ctx::Borrow);
+            let v = self.expr(ve, vh.as_ref(), Ctx::Value);
+            match (k, v) {
+                (Ok(k), Ok(v)) => {
+                    if let Some(kt) = &kh {
+                        if k.ty != *kt && k.ty != Type::Error {
+                            let _ = self.type_mismatch::<()>(ke.span, kt, &k, "This map key");
+                            failed = true;
+                            continue;
+                        }
+                    }
+                    if let Some(vt) = &vh {
+                        if v.ty != *vt && v.ty != Type::Error {
+                            let _ = self.type_mismatch::<()>(ve.span, vt, &v, "This map value");
+                            failed = true;
+                            continue;
+                        }
+                    }
+                    if !matches!(k.ty, Type::Int(_) | Type::Bool | Type::Str) {
+                        let tn = self.tn(&k.ty);
+                        self.error(Diagnostic::error(ke.span, format!("Map keys must be integers, Bool or String, but this is {}.", tn)));
+                        failed = true;
+                        continue;
+                    }
+                    hs.push((k, v));
+                }
+                _ => failed = true,
+            }
+        }
+        if failed {
+            return Err(());
+        }
+        let ty = Type::Map(Box::new(hs[0].0.ty.clone()), Box::new(hs[0].1.ty.clone()));
+        Ok(he(HKind::MapLit(hs), ty, span))
+    }
+
+    fn set_lit(&mut self, elems: &[Expr], expected: Option<&Type>, span: Span) -> R<HExpr> {
+        let hint = match expected {
+            Some(Type::Set(t)) => Some((**t).clone()),
+            _ => None,
+        };
+        let mut hs: Vec<HExpr> = vec![];
+        let mut failed = false;
+        for e in elems {
+            let want = hint.clone().or_else(|| hs.first().map(|h| h.ty.clone()));
+            match self.expr(e, want.as_ref(), Ctx::Borrow) {
+                Ok(h) => {
+                    if let Some(w) = &want {
+                        if h.ty != *w && h.ty != Type::Error {
+                            let _ = self.type_mismatch::<()>(e.span, w, &h, "This set element");
+                            failed = true;
+                            continue;
+                        }
+                    }
+                    if !matches!(h.ty, Type::Int(_) | Type::Bool | Type::Str) {
+                        let tn = self.tn(&h.ty);
+                        self.error(Diagnostic::error(e.span, format!("Set elements must be integers, Bool or String, but this is {}.", tn)));
+                        failed = true;
+                        continue;
+                    }
+                    hs.push(h);
+                }
+                Err(_) => failed = true,
+            }
+        }
+        if failed {
+            return Err(());
+        }
+        let ty = Type::Set(Box::new(hs[0].ty.clone()));
+        Ok(he(HKind::SetLit(hs), ty, span))
+    }
+
+    /// `m.has(k)`, `m.get(k, default)`, `m.remove(k)`, `m.keys()`, `m.values()`, `m.clear()`,
+    /// `s.add(x)`, `s.has(x)`, `s.remove(x)`, `s.items()`, `s.clear()`.
+    fn collection_method(&mut self, base: &Expr, name: &str, args: &[Arg], span: Span) -> R<HExpr> {
+        let hb = self.expr(base, None, Ctx::Borrow)?;
+        let (is_map, key_ty, val_ty) = match &hb.ty {
+            Type::Map(k, v) => (true, (**k).clone(), Some((**v).clone())),
+            Type::Set(t) => (false, (**t).clone(), None),
+            Type::Error => return Err(()),
+            other => {
+                let tn = self.tn(other);
+                return self.fail(Diagnostic::error(span, format!("{} has no method '{}'.", tn, name)));
+            }
+        };
+        let kind = if is_map { "Map" } else { "Set" };
+        let want_args: usize = match (is_map, name) {
+            (_, "has") | (_, "remove") | (false, "add") => 1,
+            (true, "get") => 2,
+            (_, "keys") | (_, "values") | (_, "items") | (_, "clear") => 0,
+            _ => {
+                let all = if is_map { "has, get, remove, keys, values, clear" } else { "add, has, remove, items, clear" };
+                return self.fail(Diagnostic::error(span, format!("{} has no method '{}'.", kind, name)).help(format!("{} methods: {}.", kind, all)));
+            }
+        };
+        if (is_map && name == "items") || (!is_map && (name == "keys" || name == "values")) {
+            return self.fail(Diagnostic::error(span, format!("{} has no method '{}'.", kind, name)));
+        }
+        if args.len() != want_args {
+            return self.fail(Diagnostic::error(span, format!("{}.{}() takes {} argument(s), but {} were given.", kind, name, want_args, args.len())));
+        }
+        if args.iter().any(|a| a.name.is_some()) {
+            return self.fail(Diagnostic::error(span, format!("{}.{}() does not take named arguments.", kind, name)));
+        }
+        let mutating = matches!(name, "add" | "remove" | "clear");
+        if mutating {
+            self.check_mut_place(&hb, base.span, "change")?;
+        }
+        let mut hargs = vec![hb];
+        if want_args >= 1 {
+            let k = self.expr(&args[0].value, Some(&key_ty), Ctx::Borrow)?;
+            if k.ty != key_ty && k.ty != Type::Error {
+                return self.type_mismatch(args[0].value.span, &key_ty, &k, "The key");
+            }
+            hargs.push(k);
+        }
+        let (b, ty) = match (is_map, name) {
+            (true, "has") => (Builtin::MapHas, Type::Bool),
+            (true, "get") => {
+                let v = val_ty.clone().unwrap();
+                let ctx = if v.is_owned() { Ctx::Value } else { Ctx::Borrow };
+                let d = self.expr(&args[1].value, Some(&v), ctx)?;
+                if d.ty != v && d.ty != Type::Error {
+                    return self.type_mismatch(args[1].value.span, &v, &d, "The default value");
+                }
+                hargs.push(d);
+                (Builtin::MapGet, v)
+            }
+            (true, "remove") => (Builtin::MapRemove, Type::None),
+            (true, "keys") => (Builtin::MapKeys, Type::List(Box::new(key_ty.clone()))),
+            (true, "values") => (Builtin::MapValues, Type::List(Box::new(val_ty.clone().unwrap()))),
+            (true, "clear") => (Builtin::MapClear, Type::None),
+            (false, "add") => (Builtin::SetAdd, Type::None),
+            (false, "has") => (Builtin::SetHas, Type::Bool),
+            (false, "remove") => (Builtin::SetRemove, Type::None),
+            (false, "items") => (Builtin::SetItems, Type::List(Box::new(key_ty.clone()))),
+            (false, "clear") => (Builtin::SetClear, Type::None),
+            _ => unreachable!(),
+        };
+        Ok(self.mk_builtin(b, hargs, ty, span))
     }
 
     fn find_variant(&self, eid: EnumId, name: &str) -> Option<usize> {
@@ -968,13 +1160,19 @@ impl<'a> Checker<'a> {
             }
             ForIter::Expr(e) => {
                 let mut list = self.expr(e, None, Ctx::Borrow)?;
+                // Looping over a Map visits its keys, over a Set its items (in insertion order).
+                match list.ty.clone() {
+                    Type::Map(k, _) => list = self.mk_builtin(Builtin::MapKeys, vec![list], Type::List(k), e.span),
+                    Type::Set(t) => list = self.mk_builtin(Builtin::SetItems, vec![list], Type::List(t), e.span),
+                    _ => {}
+                }
                 let elem = match &list.ty {
                     Type::List(t) => (**t).clone(),
                     Type::Error => return Err(()),
                     other => {
                         let tn = self.tn(other);
                         return self.fail(
-                            Diagnostic::error(e.span, format!("You can only loop over a range or a List, but this is {}.", tn))
+                            Diagnostic::error(e.span, format!("You can only loop over a range, a List, a Map or a Set, but this is {}.", tn))
                                 .help("Use a range like `for i in 0..10:` or a list like `for x in numbers:`."),
                         );
                     }
@@ -1226,6 +1424,14 @@ impl<'a> Checker<'a> {
             }
             ExprKind::Index { base, index } => {
                 let hb = self.expr(base, None, Ctx::Borrow)?;
+                if let Type::Map(k, v) = hb.ty.clone() {
+                    let hi = self.expr(index, Some(&k), Ctx::Borrow)?;
+                    if hi.ty != *k && hi.ty != Type::Error {
+                        return self.type_mismatch(index.span, &k, &hi, "The map key");
+                    }
+                    self.check_value_use(&v, ctx, span, "this map value")?;
+                    return Ok(he(HKind::Index(Box::new(hb), Box::new(hi)), *v, span));
+                }
                 let elem = match &hb.ty {
                     Type::List(t) => (**t).clone(),
                     Type::Error => return Err(()),
@@ -1250,6 +1456,8 @@ impl<'a> Checker<'a> {
             }
             ExprKind::Try(inner) => self.try_expr(inner, span),
             ExprKind::Tuple(elems) => self.tuple_lit(elems, expected, span),
+            ExprKind::Map(pairs) => self.map_lit(pairs, expected, span),
+            ExprKind::Set(elems) => self.set_lit(elems, expected, span),
             ExprKind::Call { callee, args } => self.call(callee, args, span, expected, ctx),
         }
     }
@@ -1480,6 +1688,10 @@ impl<'a> Checker<'a> {
                         }
                     }
                 }
+                // Map / Set methods: m.has(k), s.add(x), ...
+                if matches!(self.static_type(base), Some(Type::Map(..) | Type::Set(_))) {
+                    return self.collection_method(base, name, args, span);
+                }
                 // Static method call: Player.new(args)
                 if let ExprKind::Name(tn) = &base.kind {
                     if self.lookup(tn).is_none() && (self.struct_ids.contains_key(tn) || self.enum_ids.contains_key(tn)) {
@@ -1527,6 +1739,9 @@ impl<'a> Checker<'a> {
                     let l2: Vec<&Expr> = list.iter().map(|(_, e)| *e).collect();
                     return self.builtin(name, &l2, span, expected, ctx);
                 }
+                if matches!(name.as_str(), "has" | "get" | "remove" | "keys" | "values" | "clear" | "add" | "items") {
+                    return self.collection_method(base, name, args, span);
+                }
                 Err(())
             }
             _ => Err(()),
@@ -1546,6 +1761,7 @@ impl<'a> Checker<'a> {
             },
             ExprKind::Index { base, .. } => match self.static_type(base)? {
                 Type::List(el) => Some(*el),
+                Type::Map(_, v) => Some(*v),
                 _ => None,
             },
             _ => None,
