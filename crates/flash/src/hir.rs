@@ -138,6 +138,16 @@ pub enum HKind {
     /// Short-circuit `and` (true) / `or` (false).
     Logic(bool, Box<HExpr>, Box<HExpr>),
     Call(FuncId, Vec<HExpr>),
+    /// A new function value: closure target `target` (an index into `Program.closures`) with the
+    /// values it captures (copied in).
+    Closure {
+        target: usize,
+        captures: Vec<HExpr>,
+    },
+    /// Call a function value (a local variable or parameter of type `Fn`).
+    CallValue(Box<HExpr>, Vec<HExpr>),
+    /// Captured value `.1` of the function value `.0` (only used at the start of a lambda body).
+    Capture(Box<HExpr>, usize),
     Builtin(Builtin, Vec<HExpr>),
     PluginCall {
         plugin: usize,
@@ -251,8 +261,18 @@ pub struct ExternFn {
     pub ret: Type,
 }
 
+/// A function that can be the body of a function value. Its first parameter is the closure block.
+#[derive(Clone, Debug)]
+pub struct ClosureTarget {
+    pub func: FuncId,
+    pub ty: Type,
+    /// number of captured values stored in the closure block
+    pub captures: usize,
+}
+
 #[derive(Debug)]
 pub struct Program {
+    pub closures: Vec<ClosureTarget>,
     pub funcs: Vec<HFunc>,
     pub structs: Vec<StructInfo>,
     pub enums: Vec<EnumInfo>,

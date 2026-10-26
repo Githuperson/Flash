@@ -27,6 +27,8 @@ struct Resolver<'a> {
     enums: HashMap<String, Vec<String>>,
     /// variant name -> enums that have it (for unqualified use)
     variants: HashMap<String, Vec<String>>,
+    /// every struct field name (a field can hold a function: `op.run(1, 2)`)
+    field_names: HashSet<String>,
     /// type parameters of the generic struct/enum being visited
     tparams: HashSet<String>,
     cur: usize,
@@ -40,7 +42,7 @@ fn is_collection_method(name: &str) -> bool {
 }
 
 pub fn resolve(mods: &[LoadedModule], plugins: &[PluginBinding], diags: &mut Diagnostics) {
-    let mut r = Resolver { mods, plugins, diags, fns: vec![], structs: HashMap::new(), methods: HashSet::new(), enums: HashMap::new(), variants: HashMap::new(), tparams: HashSet::new(), cur: 0, scopes: vec![], loop_depth: 0 };
+    let mut r = Resolver { mods, plugins, diags, fns: vec![], structs: HashMap::new(), methods: HashSet::new(), enums: HashMap::new(), variants: HashMap::new(), tparams: HashSet::new(), field_names: HashSet::new(), cur: 0, scopes: vec![], loop_depth: 0 };
     r.run();
 }
 
@@ -101,6 +103,7 @@ impl<'a> Resolver<'a> {
                         }
                         let mut seen = HashSet::new();
                         for f in &s.fields {
+                            self.field_names.insert(f.name.clone());
                             if !seen.insert(f.name.clone()) {
                                 self.diags
                                     .push(Diagnostic::error(f.span, format!("The field '{}' appears twice in struct {}.", f.name, s.name)));
@@ -216,7 +219,7 @@ impl<'a> Resolver<'a> {
     fn type_expr(&mut self, t: &TypeExpr) {
         use crate::types::IntTy;
         let known = IntTy::from_name(&t.name).is_some()
-            || matches!(t.name.as_str(), "Float" | "f64" | "Bool" | "String" | "None" | "List" | "Result" | "Tuple" | "Map" | "Set")
+            || matches!(t.name.as_str(), "Float" | "f64" | "Bool" | "String" | "None" | "List" | "Result" | "Tuple" | "Map" | "Set" | "Fn")
             || self.structs.contains_key(&t.name)
             || self.tparams.contains(&t.name);
         if !known {
@@ -388,10 +391,12 @@ impl<'a> Resolver<'a> {
             ExprKind::Int(_) | ExprKind::Float(_) | ExprKind::Str(_) | ExprKind::Bool(_) | ExprKind::None => {}
             ExprKind::Name(n) => {
                 if !self.declared(n) {
-                    if self.fns[self.cur].contains(n) || is_builtin(n) {
+                    if self.fns[self.cur].contains(n) {
+                        // a function used as a value (checked against the expected `Fn` type later)
+                    } else if is_builtin(n) {
                         self.diags.push(
-                            Diagnostic::error(e.span, format!("'{}' is a function, not a value.", n))
-                                .help(format!("Call it with parentheses: {}(...)", n)),
+                            Diagnostic::error(e.span, format!("'{}' is a built-in function, not a value.", n))
+                                .help(format!("Call it with parentheses: {}(...), or wrap it: lambda x: {}(x)", n, n)),
                         );
                     } else if self.variants.contains_key(n) {
                         // a variant without fields used as a value: Empty
@@ -417,10 +422,7 @@ impl<'a> Resolver<'a> {
                 match &callee.kind {
                     ExprKind::Name(n) => {
                         if self.declared(n) {
-                            self.diags.push(Diagnostic::error(
-                                callee.span,
-                                format!("'{}' is a variable, not a function, so it cannot be called.", n),
-                            ));
+                            // a function value (checked later)
                         } else if !(self.fns[self.cur].contains(n) || is_builtin(n) || self.structs.contains_key(n) || self.variants.contains_key(n)) {
                             self.unknown_name(n, callee.span, true);
                         }
@@ -429,7 +431,7 @@ impl<'a> Resolver<'a> {
                         if let ExprKind::Name(m) = &base.kind {
                             if self.declared(m) {
                                 // method-call syntax on a variable
-                                if !(self.fns[self.cur].contains(name) || is_builtin(name) || self.is_method_name(name) || is_collection_method(name)) {
+                                if !(self.fns[self.cur].contains(name) || is_builtin(name) || self.is_method_name(name) || is_collection_method(name) || self.field_names.contains(name)) {
                                     self.unknown_name(name, *name_span, true);
                                 }
                             } else if self.enums.contains_key(m) && self.enums[m].iter().any(|v| v == name) {
@@ -466,7 +468,7 @@ impl<'a> Resolver<'a> {
                             }
                         } else {
                             self.expr(base);
-                            if !(self.fns[self.cur].contains(name) || is_builtin(name) || self.is_method_name(name) || is_collection_method(name)) {
+                            if !(self.fns[self.cur].contains(name) || is_builtin(name) || self.is_method_name(name) || is_collection_method(name) || self.field_names.contains(name)) {
                                 self.unknown_name(name, *name_span, true);
                             }
                         }
@@ -508,6 +510,17 @@ impl<'a> Resolver<'a> {
                 }
             }
             ExprKind::Try(a) => self.expr(a),
+            ExprKind::Lambda { params, body } => {
+                for p in params {
+                    if let Some(t) = &p.ty {
+                        self.type_expr(t);
+                    }
+                }
+                // the body sees the enclosing names; the parameters shadow them
+                self.scopes.push(params.iter().map(|p| p.name.clone()).collect());
+                self.expr(body);
+                self.scopes.pop();
+            }
         }
     }
 }

@@ -295,6 +295,18 @@ impl<'a> Ck<'a> {
                     self.expr(a);
                 }
             }
+            HKind::Closure { captures: args, .. } => {
+                for a in args {
+                    self.expr(a);
+                }
+            }
+            HKind::CallValue(f, args) => {
+                self.expr(f);
+                for a in args {
+                    self.expr(a);
+                }
+            }
+            HKind::Capture(a, _) => self.expr(a),
             HKind::PluginCall { args, .. } | HKind::ExternCall { args, .. } => {
                 for a in args {
                     self.expr(a);

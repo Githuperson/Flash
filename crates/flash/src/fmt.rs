@@ -203,7 +203,7 @@ fn render_line(src: &str, toks: &[Token]) -> String {
     let mut nest = 0i32;
     for (i, t) in toks.iter().enumerate() {
         let text = match &t.tok {
-            Tok::Ident(_) | Tok::Int(_) | Tok::Float(_) | Tok::Str(_) | Tok::FStr(_) => {
+            Tok::Ident(_) | Tok::Int(_) | Tok::Float(_) | Tok::Str(_) | Tok::FStr(_) | Tok::InlinePlugin { .. } => {
                 src[t.span.lo as usize..t.span.hi as usize].to_string()
             }
             other => other.text().to_string(),

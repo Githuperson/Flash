@@ -23,11 +23,18 @@ pub enum Tok {
     Float(f64),
     Str(String),
     FStr(Vec<FPart>),
+    /// `when using rust plugin "name":` followed by an indented block of foreign source code.
+    InlinePlugin {
+        kind: String,
+        name: String,
+        code: String,
+    },
     // keywords
     Fn,
     Struct,
     Enum,
     Match,
+    Lambda,
     If,
     Elif,
     Else,
@@ -98,6 +105,7 @@ impl Tok {
             Tok::Ident(s) => format!("the name '{}'", s),
             Tok::Int(_) | Tok::Float(_) => "a number".into(),
             Tok::Str(_) | Tok::FStr(_) => "a string".into(),
+            Tok::InlinePlugin { .. } => "a `when using ... plugin` block".into(),
             Tok::Newline => "the end of the line".into(),
             Tok::Indent => "extra indentation".into(),
             Tok::Dedent => "the end of an indented block".into(),
@@ -111,6 +119,7 @@ impl Tok {
             Tok::Struct => "struct",
             Tok::Enum => "enum",
             Tok::Match => "match",
+            Tok::Lambda => "lambda",
             Tok::If => "if",
             Tok::Elif => "elif",
             Tok::Else => "else",
@@ -212,6 +221,7 @@ fn keyword(s: &str) -> Option<Tok> {
         "struct" => Tok::Struct,
         "enum" => Tok::Enum,
         "match" => Tok::Match,
+        "lambda" => Tok::Lambda,
         "if" => Tok::If,
         "elif" => Tok::Elif,
         "else" => Tok::Else,
@@ -264,6 +274,9 @@ impl<'a> Lexer<'a> {
                 if !self.handle_indentation() {
                     break;
                 }
+                if !self.inline && self.src[self.pos..].starts_with("when using ") {
+                    self.inline_plugin();
+                }
                 continue;
             }
             if self.pos >= self.bytes.len() {
@@ -314,6 +327,54 @@ impl<'a> Lexer<'a> {
             }
         }
         self.push(Tok::Eof, end, end);
+    }
+
+    /// `when using rust plugin "name":` (or `cpp`; `;` also ends the header) and the indented
+    /// lines below it, which are kept as raw text for the foreign compiler.
+    fn inline_plugin(&mut self) {
+        let lo = self.pos;
+        let line_start = self.src[..lo].rfind('\n').map(|p| p + 1).unwrap_or(0);
+        let header_width = lo - line_start;
+        let line_end = self.src[lo..].find('\n').map(|p| lo + p).unwrap_or(self.src.len());
+        let header = self.src[lo..line_end].trim_end();
+        let header = header.strip_suffix(':').or_else(|| header.strip_suffix(';')).unwrap_or(header).trim_end();
+        let words: Vec<&str> = header.splitn(5, ' ').collect();
+        let ok = words.len() == 5 && words[0] == "when" && words[1] == "using" && matches!(words[2], "rust" | "cpp") && words[3] == "plugin";
+        let name = if ok { words[4].trim().strip_prefix('"').and_then(|s| s.strip_suffix('"')) } else { None };
+        let Some(name) = name.filter(|n| !n.is_empty() && !n.contains('"')) else {
+            self.err(lo, line_end, "A plugin block starts with `when using rust plugin \"name\":` or `when using cpp plugin \"name\":`.");
+            self.pos = line_end;
+            return;
+        };
+        let kind = words[2].to_string();
+        // the indented lines below the header
+        let mut pos = (line_end + 1).min(self.src.len());
+        let mut end = line_end;
+        let mut lines: Vec<&str> = vec![];
+        while pos < self.src.len() {
+            let e = self.src[pos..].find('\n').map(|p| pos + p).unwrap_or(self.src.len());
+            let line = self.src[pos..e].trim_end_matches('\r');
+            let width = line.chars().take_while(|c| *c == ' ' || *c == '\t').map(|c| if c == '\t' { 4 } else { 1 }).sum::<usize>();
+            if line.trim().is_empty() {
+                lines.push("");
+            } else if width > header_width {
+                lines.push(line);
+                end = e;
+            } else {
+                break;
+            }
+            pos = e + 1;
+        }
+        lines.truncate(lines.iter().rposition(|l| !l.is_empty()).map(|i| i + 1).unwrap_or(0));
+        if lines.is_empty() {
+            self.err(lo, line_end, "This plugin block has no code under it.");
+            self.pos = line_end;
+            return;
+        }
+        let indent = lines.iter().filter(|l| !l.is_empty()).map(|l| l.len() - l.trim_start().len()).min().unwrap_or(0);
+        let code: Vec<&str> = lines.iter().map(|l| if l.len() >= indent { &l[indent..] } else { *l }).collect();
+        self.push(Tok::InlinePlugin { kind, name: name.to_string(), code: code.join("\n") + "\n" }, lo, end);
+        self.pos = end;
     }
 
     /// Process leading whitespace of a new line. Returns false at EOF.

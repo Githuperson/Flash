@@ -63,11 +63,11 @@ Targets: Linux, macOS and Windows on x86-64, plus Linux and macOS on arm64 (Wind
   Help: Convert the number to text with `str(x)`, or use an f-string like f"value: {x}".
   ```
 - **Fast to compile.** Dev builds take ~10 ms, release builds 20–100 ms, and unchanged programs are served from a build cache.
-- **Types:** `Int`, `i8…u64`, `Float`, `Bool`, `String`, `List[T]`, `Result[T]` (with `?`), structs, f-strings, modules, keyword arguments. Integer overflow wraps, and there are no implicit conversions.
+- **Types:** `Int`, `i8…u64`, `Float`, `Bool`, `String`, `List[T]`, `Map[K, V]`, `Set[T]`, tuples, `Result[T]` (with `?`), structs and enums (with `match`), generics like `Pair[A, B]`, methods, lambdas and function values (`Fn(Int) -> Int`), f-strings, modules, keyword arguments. Integer overflow wraps, and there are no implicit conversions.
 - **Batteries:** strings, math, files, paths, args, env, stdin, timing, plus `std.math` / `std.text` / `std.bench`. The runtime is written in Flash itself and talks straight to the OS.
 - **Tools:** `flash run | build | check | test | fmt`, and `flashpkg` for local packages with a hash-checked lock file.
 
-Not there yet: tuples, maps, user generics, methods, closures, threads, an LSP server, a package registry. See [LANGUAGE_SPEC.md §16](LANGUAGE_SPEC.md#16-not-implemented-yet).
+Not there yet: threads, traits, an LSP server, a package registry. See [LANGUAGE_SPEC.md §16](LANGUAGE_SPEC.md#16-not-implemented-yet).
 
 ## How well does it run?
 
@@ -100,7 +100,7 @@ The emulator tests (`scripts/run_a64.py`, `scripts/run_win.py`, which need Pytho
 
 ## Optional extras
 
-The default build has no C dependencies at all. If you build the compiler with `cargo build --features legacy-backends` you also get the older Cranelift/LLVM back ends, which unlock **`extern fn` + `--link`** (static C/C++/`no_std` Rust libraries) and **native plugins** in Rust and C++. Plugins are native code with full access to your process; read the trust model in [PLUGIN_ABI.md](PLUGIN_ABI.md) first. Guides: [static linking](LANGUAGE_SPEC.md#statically-linked-native-libraries-extern-fn) · [`examples/static_link`](examples/static_link) · [`plugins/`](plugins).
+The default build has no C dependencies at all. If you build the compiler with `cargo build --features legacy-backends` you also get the older Cranelift/LLVM back ends, which unlock **`extern fn` + `--link`** (static C/C++/`no_std` Rust libraries) and **native plugins** in Rust and C++. You can even write a plugin right inside your program: `when using rust plugin "name":` (or `cpp`) followed by an indented block of Rust or C++ ([example](examples/plugins_inline.flash)). Plugins are native code with full access to your process; read the trust model in [PLUGIN_ABI.md](PLUGIN_ABI.md) first. Guides: [static linking](LANGUAGE_SPEC.md#statically-linked-native-libraries-extern-fn) · [`examples/static_link`](examples/static_link) · [`plugins/`](plugins).
 
 ## Hacking on Flash
 

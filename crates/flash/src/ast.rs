@@ -38,6 +38,8 @@ pub enum PluginKind {
 pub struct PluginDecl {
     pub kind: PluginKind,
     pub name: String,
+    /// Source code written in the program itself (`when using rust plugin "name":`).
+    pub inline: Option<String>,
     pub span: Span,
 }
 
@@ -309,4 +311,16 @@ pub enum ExprKind {
     Map(Vec<(Expr, Expr)>),
     /// `{a, b, ...}`
     Set(Vec<Expr>),
+    /// `lambda x, y: x + y` (parameter types come from the context unless written `(x: Int)`).
+    Lambda {
+        params: Vec<LambdaParam>,
+        body: Box<Expr>,
+    },
+}
+
+#[derive(Clone, Debug)]
+pub struct LambdaParam {
+    pub name: String,
+    pub ty: Option<TypeExpr>,
+    pub span: Span,
 }

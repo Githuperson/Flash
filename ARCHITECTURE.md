@@ -86,6 +86,16 @@ Runs on the HIR of every function: a forward data-flow analysis over the set of 
 fixed-point iteration for loops (so "moved in the previous iteration" is caught), unreachable-path tracking after `return`/`break`/`continue`,
 plus the call-aliasing check and the "list is being iterated" lock. The soundness argument is in LANGUAGE_SPEC §10: borrows cannot be stored, so they cannot outlive their owner, and exclusive access is unique.
 
+### Data types beyond structs (implementation notes)
+
+* **Methods** are ordinary functions named `Type.name`; `p.f(x)` is rewritten to the call `Type.f(p, x)` by the checker, which instantiates the function per argument types like any other.
+* **Tuples** are anonymous structs (`StructInfo.tuple`, fields `0`, `1`, ...), so layout, drop and clone glue are shared with structs.
+* **Enums** are heap blocks `[tag][payload of the variant]` sized for the largest variant (`EnumInfo`). `match` is desugared by the checker into an `if` chain over `EnumTag` and `EnumField` reads; names bound by a pattern are read-only aliases, and the scrutinee's root is locked (`HStmtKind::Borrowed`) while the arms run.
+* **Generic structs/enums** are templates kept as AST (`generic_structs`, `generic_enums`). Each distinct argument list is instantiated once into a concrete `StructInfo`/`EnumInfo` named `Pair[Int, String]`; constructors infer the arguments from their values or from the expected type. Nothing generic reaches the later stages.
+* **Maps and sets** are insertion-ordered hash tables (dense entry array plus an index table) written in Flash (`runtime/map.flash`); the lowering calls them like any runtime function, so only the native back end supports them.
+* **Function values** are defunctionalised: a lambda (or a named function used as a value) becomes an ordinary function whose first parameter is the closure block `[id][captured copies]`; `ClosureTarget`s record them. Calling a value loads the id and dispatches over the targets of the same `Fn` type with a compare chain, so no indirect-call instruction (and no new machine code) is needed on any back end. Only `Copy` values are captured.
+* **Inline plugins** (`when using rust plugin "x":`) are one lexer token (`Tok::InlinePlugin`) holding the raw code. `inline_plugin.rs` reads the function signatures from it, writes a manifest, builds the library with `rustc`/`c++` into `<cache>-plugins/` (keyed by a hash of the code) and hands the manifest to the normal plugin loader.
+
 ## 4. Middle end
 
 ### IR (`ir.rs`)

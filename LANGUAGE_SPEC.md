@@ -69,7 +69,7 @@ Keywords: `fn struct if elif else while for in return break continue pass and or
 | `Result[T]` | a `T` or an error message (§9) |
 | *struct name* | user-defined struct (§6) |
 
-Functions are not first-class values in v0.1 (they can only be called by name).
+Functions are values of type `Fn(A) -> R` (see *Function values and lambdas* in §5). Other types: `(A, B)` tuples, `Map[K, V]`, `Set[T]`, enums (§6) and generic structs/enums such as `Pair[A, B]`.
 
 ### Numeric conversions are always explicit
 
@@ -243,6 +243,30 @@ For numbers, `Bool` and `None` the modes make no difference: they are copied in 
 the parameter. `mut` is allowed only for `String`, `List` and struct parameters, and a `mut` parameter cannot be replaced as a whole
 (modify its contents instead). See §10.
 
+### Function values and lambdas
+
+`Fn(A, B) -> R` is the type of a function value. A named function or a `lambda` can be stored, passed and returned:
+
+```
+fn apply(f: Fn(Int) -> Int, x: Int) -> Int:
+    return f(x)
+
+fn double(x: Int) -> Int:
+    return x * 2
+
+fn make_adder(n: Int) -> Fn(Int) -> Int:
+    return lambda x: x + n
+
+say(apply(double, 21))                    # a named function as a value
+say(apply(lambda x: x * 3, 2))            # lambda params: types come from the Fn type expected
+add5 = make_adder(5)
+say(add5(10))
+```
+
+* A lambda body is one expression. Its parameter types come from the `Fn` type it is passed to (or assigned to: `f: Fn(Int) -> Int = lambda x: x + 1`).
+* A lambda may use numbers and `Bool` from the code around it; they are **copied in** when the lambda is created, so later changes aren't seen. Strings, lists and structs must be passed as parameters.
+* Function values are owned (freed automatically) and can be struct fields (`op.run(1, 2)`), list items and return values. Parameters of function values borrow their arguments. Functions with `own`/`mut` parameters can't be used as values.
+
 ---
 
 ## 6. Structs
@@ -260,9 +284,90 @@ player.score = player.score + 10
 * Every field needs a type annotation. All fields must be given at construction.
 * Structs are **owned values**: assigning one moves it (`b = a` makes `a` unusable); use `copy(a)` for a deep copy.
 * Struct values live on the heap and are freed automatically when the owner goes out of scope.
-* Struct names are global across the modules of a program. v0.1 has no methods; use functions (`level_up(p)`, or
-  `p.level_up()` which is sugar for the same call).
+* Struct names are global across the modules of a program. See *Methods* below; `p.level_up()` also works for plain functions (it is sugar for `level_up(p)`).
 * Layout: fields are stored in declaration order with natural alignment (documented in ARCHITECTURE.md).
+
+### Methods
+
+A function whose name is `Type.name` and whose first parameter is `self` is a method. Call it on a value (`p.level_up(5)`) or on the type
+(`Player.new("Alex")`); both are the same call. `self` follows the usual parameter modes (`mut self` to change the value).
+
+```
+fn Player.new(own name: String) -> Player:
+    return Player(name=name, score=0)
+
+fn Player.level_up(mut self, amount: Int):
+    self.score = self.score + amount
+
+fn Player.describe(self) -> String:
+    return f"{self.name} has {self.score} points"
+
+p = Player.new("Alex")
+p.level_up(60)
+say(p.describe())
+```
+
+### Generic structs and enums
+
+A type can have type parameters in square brackets. Each use with different arguments is its own concrete type (`Pair[Int, String]`),
+checked and compiled like a hand-written one, so there is no runtime cost.
+
+```
+struct Pair[A, B]:
+    first: A
+    second: B
+
+enum Option[T]:
+    Some(value: T)
+    Nothing
+
+fn Pair.swap(self):
+    return Pair(first=copy(self.second), second=copy(self.first))
+
+p = Pair(first=1, second="one")          # Pair[Int, String]: inferred from the values
+w: Option[String] = Some("hi")           # or from the type you write
+```
+
+The arguments are inferred from the constructor values or from the expected type (an annotated variable, parameter or return type).
+When neither says enough (`x = Nothing`), the compiler asks you to annotate. Methods are written with the plain type name (`fn Pair.swap(self)`) and work for every instance.
+
+### Tuples
+
+`(a, b)` makes a tuple, `t.0` / `t.1` read an element, and a tuple can be unpacked into names. They are small anonymous structs (owned, moved on assignment), which makes returning several values easy:
+
+```
+fn min_max(xs: List[Int]) -> (Int, Int):
+    ...
+    return lo, hi
+
+lo, hi = min_max(nums)
+pair = (1, "one")
+say(pair.0, pair.1)
+```
+
+### Enums and `match`
+
+```
+enum Shape:
+    Circle(radius: Float)
+    Rect(w: Float, h: Float)
+    Empty
+
+fn Shape.area(self) -> Float:
+    match self:
+        Circle(r):
+            return 3.14 * r * r
+        Rect(w, h):
+            return w * h
+        Empty:
+            return 0.0
+
+s = Shape.Circle(2.0)          # or just Circle(2.0) when the name is unique
+```
+
+* A variant can carry named fields; `match` binds them by position. Names bound by a pattern **borrow** from the matched value, so the value can't be changed or moved inside that `match`.
+* `_` matches anything; literal patterns (`0`, `"yes"`) work on numbers and strings. A `match` over an enum must cover every variant (or have `_`).
+* Enums are owned heap values and may refer to themselves (`Node(children: List[Tree])`).
 
 ---
 
@@ -287,6 +392,26 @@ grid: List[List[Int]] = []          # lists nest
 * `say(list)` prints `[1, 2, 3]`; strings inside lists are printed in quotes.
 * Reading an *owned* element (a `String` or struct) out of a list into a variable would move it out and leave a hole, so it is
   rejected; read it inside an expression (`say(names[0])`, `len(names[0])`, `names[0] + "!"`) or copy it: `n = copy(names[0])`.
+
+### Maps and sets
+
+`Map[K, V]` and `Set[T]` are hash tables that remember insertion order. Keys are integers, `Bool` or `String`.
+
+```
+ages: Map[String, Int] = {}              # an empty {} needs a type
+ages["ana"] = 31
+scores = {"x": 1.5, "y": 2.5}            # {k: v, ...} is a Map
+seen = {1, 2, 3}                         # {a, b, ...} is a Set
+
+say(ages["ana"], ages.has("bo"), ages.get("bo", -1), len(ages))
+ages.remove("ana")
+for k in scores:                          # iterates keys (items of a Set) in insertion order
+    say(k, scores[k])
+say(ages.keys(), ages.values())
+seen.add(4)                               # Set: add, has, remove, items, clear
+```
+
+Indexing a missing key is a runtime error (exit code 101); use `get(key, default)` or `has(key)`. Maps and sets are owned values like lists. They exist only in Flash's own back end (not the legacy Cranelift/LLVM ones).
 
 ---
 
@@ -429,6 +554,33 @@ r = fast_math.checked_div(1, 0)         # fallible functions return Result[T]
   compiler recorded, and prints a warning with the library path and its SHA-256 (silence with `FLASH_PLUGIN_QUIET=1`).
 * Plugins execute with the full privileges of the program. See PLUGIN_ABI.md for the trust model.
 
+### Plugin code inside the program
+
+Instead of building a plugin by hand, write its source under a `when using` line. The compiler builds it (with `rustc` or your C++ compiler) the first time and caches the result:
+
+```
+when using rust plugin "mathx":
+    fn add(a: i64, b: i64) -> i64 { a + b }
+    fn safe_div(a: i64, b: i64) -> Result<i64, String> {
+        if b == 0 { Err("divide by zero".to_string()) } else { Ok(a / b) }
+    }
+
+when using cpp plugin "textx":
+    #include <algorithm>
+    static std::string rev(std::string s) { std::reverse(s.begin(), s.end()); return s; }
+    std::string flip(std::string s) { return rev(s); }
+    double hyp(double a, double b) { return a * a + b * b; }
+
+say(mathx.add(40, 2))
+say(textx.flip("abc"))
+```
+
+* The header ends with `:` (a trailing `;` also works). Everything indented below it is the foreign code; the name in quotes is what you call (`mathx.add`).
+* **Rust** blocks hold `fn` items (they become the `functions { }` of the plugin SDK's `flash_plugin!`). **C++** blocks are plain functions plus anything else you need (includes, helper types, `static` helpers); every non-`static` function at the top level is exported.
+* Signatures are read from the code. Allowed types: Rust `i8…i64`, `u8…u64`, `f64`, `bool`, `&str` (parameters), `String` (return) and `Result<T, String>` (becomes a `Result[T]`); C++ `int8_t…int64_t`, `uint8_t…uint64_t`, `double`, `bool`, `std::string`, `void`.
+* Compiler errors are shown with line numbers counted from the first line of the block. The built libraries live in `<cache dir>-plugins` (next to the build cache) and are rebuilt when the code changes.
+* Like all plugins this needs a compiler built with `--features legacy-backends`, and the plugin runs with the program's full privileges (see PLUGIN_ABI.md). Building the program also runs `rustc`/`c++` on the block, so only compile programs you trust.
+
 ---
 
 ### Statically linked native libraries: `extern fn`
@@ -507,14 +659,19 @@ Compiler diagnostics always exit with code 1 (`flash check/build/run`); usage er
 
 ```
 file        = { item NEWLINE* } ;
-item        = fn_def | extern_fn | struct_def | import | use_plugin | statement ;
+item        = fn_def | extern_fn | struct_def | enum_def | import | use_plugin | inline_plugin | statement ;
 extern_fn   = "extern" "fn" NAME "(" [ NAME ":" type { "," NAME ":" type } ] ")" [ "->" type ] ;
 fn_def      = "fn" NAME "(" [ param { "," param } ] ")" [ "->" type ] block ;
 param       = [ "mut" | "own" ] NAME [ ":" type ] ;
-struct_def  = "struct" NAME ":" NEWLINE INDENT { NAME ":" type NEWLINE } DEDENT ;
+struct_def  = "struct" NAME [ "[" NAME { "," NAME } "]" ] ":" NEWLINE INDENT { NAME ":" type NEWLINE } DEDENT ;
+enum_def    = "enum" NAME [ "[" NAME { "," NAME } "]" ] ":" NEWLINE INDENT { NAME [ "(" NAME ":" type { "," NAME ":" type } ")" ] NEWLINE } DEDENT ;
+match       = "match" expr ":" NEWLINE INDENT { pattern block } DEDENT ;
+pattern     = "_" | literal | NAME [ "(" NAME { "," NAME } ")" ] ;
+lambda      = "lambda" [ NAME { "," NAME } | "(" NAME [ ":" type ] { "," NAME [ ":" type ] } ")" ] ":" expr ;
+inline_plugin = "when" "using" ( "rust" | "cpp" ) "plugin" STRING ":" NEWLINE INDENT raw_code DEDENT ;
 import      = "import" NAME { "." NAME } ;
 use_plugin  = "use" ( "rust_plugin" | "cpp_plugin" ) STRING ;
-type        = NAME [ "[" type { "," type } "]" ] ;
+type        = NAME [ "[" type { "," type } "]" ] | "(" type { "," type } ")" | "Fn" "(" [ type { "," type } ] ")" [ "->" type ] ;
 
 block       = ":" ( simple_stmt | NEWLINE INDENT statement+ DEDENT ) ;
 statement   = if | while | for | "break" | "continue" | "pass" | "return" [expr] | assignment | expr ;
@@ -538,8 +695,8 @@ arg         = [ NAME "=" ] expr ;
 
 These are part of the design direction but **do not exist** in v0.1; the compiler rejects or does not recognise them:
 
-* tuples, maps/dictionaries, sets; `match`; ternary expressions; `try/except` (use `Result`);
-* user-defined generics, traits/interfaces, methods (`impl` blocks), operator overloading, closures and first-class functions;
+* ternary expressions; `try/except` (use `Result`);
+* traits/interfaces, generic *functions* with explicit type parameters (plain functions are already generic by inference), operator overloading, closures that capture strings, lists or structs;
 * string indexing and slicing syntax, character type, string formatting specs (`{x:.2f}`);
 * global variables and constants; `while … else`; `del`; `with`;
 * threads, async, channels (so no data-race story beyond "there is no concurrency");

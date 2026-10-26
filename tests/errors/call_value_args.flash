@@ -1,0 +1,4 @@
+fn run(f: Fn(Int) -> Int):
+    say(f(1, 2))
+
+run(lambda x: x)

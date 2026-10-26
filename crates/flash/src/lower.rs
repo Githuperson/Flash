@@ -574,6 +574,10 @@ impl<'a, 'p> FnLower<'a, 'p> {
                 let sz = self.iconst(Ty::I64, si.size as i64);
                 self.rt("fl_free", &[p, sz]);
             }
+            Type::Func(..) => {
+                let sz = self.iconst(Ty::I64, self.closure_block());
+                self.rt("fl_free", &[p, sz]);
+            }
             Type::Map(..) | Type::Set(_) => self.drop_map(ty, p),
             Type::Enum(eid) => {
                 let info = self.lw.prog.enums[*eid].clone();
@@ -699,6 +703,16 @@ impl<'a, 'p> FnLower<'a, 'p> {
                     let v = self.load(ir_ty(ft), p, off);
                     let v2 = if ft.is_owned() { self.emit_clone(ft, v) } else { v };
                     self.store(new, off, v2);
+                }
+                new
+            }
+            Type::Func(..) => {
+                let sz = self.closure_block();
+                let n = self.iconst(Ty::I64, sz);
+                let new = self.rtv("fl_alloc", &[n]);
+                for w in 0..(sz / 8) {
+                    let x = self.load(Ty::I64, p, (w * 8) as i32);
+                    self.store(new, (w * 8) as i32, x);
                 }
                 new
             }
@@ -1257,10 +1271,74 @@ impl<'a, 'p> FnLower<'a, 'p> {
                     None => self.dummy(),
                 }
             }
+            HKind::Closure { target, captures } => {
+                let sz = self.iconst(Ty::I64, self.closure_block());
+                let vals: Vec<VReg> = captures.iter().map(|c| self.borrow(c)).collect();
+                let p = self.rtv("fl_alloc", &[sz]);
+                let id = self.iconst(Ty::I64, *target as i64);
+                self.store(p, 0, id);
+                for (i, v) in vals.into_iter().enumerate() {
+                    self.store(p, 8 + 8 * i as i32, v);
+                }
+                p
+            }
+            HKind::Capture(env, i) => {
+                let p = self.borrow(env);
+                self.load(ir_ty(&e.ty), p, 8 + 8 * *i as i32)
+            }
+            HKind::CallValue(f, args) => self.call_value(f, args, e),
             HKind::Builtin(b, args) => self.builtin(b, args, e),
             HKind::PluginCall { plugin, func, args } => self.plugin_call(*plugin, *func, args, e),
             HKind::ExternCall { index, args } => self.extern_call(*index, args, e),
             HKind::Try(inner) => self.try_expr(inner, &e.ty),
+        }
+    }
+
+    /// Every closure block has the same size: the id plus room for the most captures any lambda has.
+    fn closure_block(&self) -> i64 {
+        8 * (1 + self.lw.prog.closures.iter().map(|c| c.captures).max().unwrap_or(0) as i64)
+    }
+
+    /// Call a function value: look at its id and jump to the lambda (or wrapped function) it names.
+    fn call_value(&mut self, f: &HExpr, args: &[HExpr], e: &HExpr) -> VReg {
+        let env = self.borrow(f);
+        let argv: Vec<VReg> = args.iter().map(|a| self.borrow(a)).collect();
+        let targets: Vec<usize> = (0..self.lw.prog.closures.len()).filter(|&i| self.lw.prog.closures[i].ty == f.ty).collect();
+        let rty = e.ty.clone();
+        let res = if rty == Type::None { None } else { Some(self.vreg(ir_ty(&rty))) };
+        if targets.is_empty() {
+            // no function of this type exists, so this call can never run
+            return match res {
+                Some(_) if ir_ty(&rty) == Ty::F64 => self.fconst(0.0),
+                Some(_) => self.iconst(ir_ty(&rty), 0),
+                None => self.dummy(),
+            };
+        }
+        let id = self.load(Ty::I64, env, 0);
+        let join = self.new_block();
+        for (n, &t) in targets.iter().enumerate() {
+            let func = self.lw.prog.closures[t].func as u32;
+            let mut a = vec![env];
+            a.extend(argv.iter().copied());
+            if n + 1 < targets.len() {
+                let k = self.iconst(Ty::I64, t as i64);
+                let is = self.cmp(CmpOp::Eq, id, k);
+                let yes = self.new_block();
+                let no = self.new_block();
+                self.branch(is, yes, no);
+                self.switch(yes);
+                self.emit(Inst::Call { dst: res, callee: Callee::Func(func), args: a });
+                self.jump_to(join);
+                self.switch(no);
+            } else {
+                self.emit(Inst::Call { dst: res, callee: Callee::Func(func), args: a });
+                self.jump_to(join);
+            }
+        }
+        self.switch(join);
+        match res {
+            Some(r) => r,
+            None => self.dummy(),
         }
     }
 

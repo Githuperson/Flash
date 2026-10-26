@@ -1,0 +1,23 @@
+# Rust and C++ plugins written right inside the program (needs a build of Flash with --features legacy-backends).
+# Rust blocks hold `fn` items; C++ blocks hold ordinary functions (static ones stay private).
+when using rust plugin "mathx":
+    fn add(a: i64, b: i64) -> i64 { a + b }
+    fn shout(t: &str) -> String { format!("{}!", t.to_uppercase()) }
+    fn safe_div(a: i64, b: i64) -> Result<i64, String> {
+        if b == 0 { Err("divide by zero".to_string()) } else { Ok(a / b) }
+    }
+
+when using cpp plugin "textx":
+    #include <algorithm>
+    static std::string rev(std::string s) { std::reverse(s.begin(), s.end()); return s; }
+    std::string flip(std::string s) { return rev(s); }
+    double hyp(double a, double b) { return a * a + b * b; }
+    bool is_even(int64_t n) { return n % 2 == 0; }
+
+say(mathx.add(40, 2))
+say(mathx.shout("flash"))
+say(textx.flip("abc"))
+say(textx.hyp(3.0, 4.0))
+say(textx.is_even(10))
+r = mathx.safe_div(10, 2)
+say(r?)

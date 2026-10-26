@@ -1,0 +1,5 @@
+fn run(f: Fn(Int) -> Int):
+    say(f(1))
+
+name = "text"
+run(lambda x: len(name) + x)

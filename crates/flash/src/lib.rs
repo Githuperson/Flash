@@ -22,6 +22,7 @@ pub mod driver;
 pub mod fmt;
 pub mod gvn;
 pub mod hir;
+pub mod inline_plugin;
 pub mod ir;
 pub mod cfg;
 pub mod lexer;

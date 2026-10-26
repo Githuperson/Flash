@@ -33,6 +33,10 @@ pub struct FnCtx {
     pub inst: FuncId,
     /// For instances of functions with inferred parameter types: where it was called from.
     pub call_site: Option<(Span, String)>,
+    /// A lambda body: names from the enclosing function are captured (copied in).
+    pub lambda: bool,
+    /// (local of the enclosing function, its copy in this lambda)
+    pub captures: Vec<(LocalId, LocalId)>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -55,6 +59,9 @@ pub struct Checker<'a> {
     pub generic_enums: HashMap<String, Rc<EnumDef>>,
     /// type parameters in scope while a generic's fields are resolved
     pub tsubst: HashMap<String, Type>,
+    pub closures: Vec<ClosureTarget>,
+    /// function -> closure target of the wrapper that lets it be used as a value
+    pub fn_values: HashMap<FuncId, usize>,
     pub fns: Vec<FnItem>,
     pub fn_index: HashMap<(usize, String), usize>,
     pub instances: HashMap<(usize, Vec<Type>), FuncId>,
@@ -77,6 +84,8 @@ pub fn check_program(mods: &[LoadedModule], plugins: &[PluginBinding], diags: &m
         generic_structs: HashMap::new(),
         generic_enums: HashMap::new(),
         tsubst: HashMap::new(),
+        closures: vec![],
+        fn_values: HashMap::new(),
         fns: vec![],
         fn_index: HashMap::new(),
         instances: HashMap::new(),
@@ -288,6 +297,8 @@ impl<'a> Checker<'a> {
             module: 0,
             inst: main_id,
             call_site: None,
+            lambda: false,
+            captures: vec![],
         });
         let mut body = vec![];
         let root = &self.mods[0].ast;
@@ -326,6 +337,7 @@ impl<'a> Checker<'a> {
         }
         let funcs: Vec<HFunc> = std::mem::take(&mut self.funcs).into_iter().map(|f| f.expect("function was checked")).collect();
         Some(Program {
+            closures: std::mem::take(&mut self.closures),
             funcs,
             structs: std::mem::take(&mut self.structs),
             enums: std::mem::take(&mut self.enums),
@@ -383,6 +395,14 @@ impl<'a> Checker<'a> {
                 } else {
                     Ok(Type::Set(Box::new(key)))
                 }
+            }
+            "Fn" => {
+                let mut tys = vec![];
+                for a in &t.args {
+                    tys.push(self.resolve_type(a)?);
+                }
+                let ret = tys.pop().unwrap_or(Type::None);
+                Ok(Type::Func(tys, Box::new(ret)))
             }
             "Tuple" => {
                 let mut elems = vec![];
@@ -963,6 +983,8 @@ impl<'a> Checker<'a> {
             } else {
                 None
             },
+            lambda: false,
+            captures: vec![],
         });
         let mut params = vec![];
         for (p, ty) in def.params.iter().zip(arg_tys.iter()) {
@@ -1019,7 +1041,39 @@ impl<'a> Checker<'a> {
     }
 
     pub fn lookup(&mut self, name: &str) -> Option<LocalId> {
-        self.cx().scopes.iter().rev().find_map(|s| s.get(name).copied())
+        let depth = self.stack.len() - 1;
+        self.lookup_in(depth, name)
+    }
+
+    /// Find `name` in the function at `depth` of the stack. A lambda that mentions a variable of
+    /// the function around it gets its own copy (a "capture"), which only works for plain values.
+    fn lookup_in(&mut self, depth: usize, name: &str) -> Option<LocalId> {
+        if let Some(id) = self.stack[depth].scopes.iter().rev().find_map(|s| s.get(name).copied()) {
+            return Some(id);
+        }
+        if !self.stack[depth].lambda || depth == 0 {
+            return None;
+        }
+        let outer = self.lookup_in(depth - 1, name)?;
+        let (ty, span) = {
+            let l = &self.stack[depth - 1].locals[outer];
+            (l.ty.clone(), l.span)
+        };
+        if !ty.is_copy() {
+            let tn = self.tn(&ty);
+            self.error(
+                Diagnostic::error(span, format!("A lambda can only use numbers and Bool from outside itself, but '{}' is {}.", name, tn)).help(
+                    format!("Pass '{}' to the lambda as a parameter instead, or use a named function.", name),
+                ),
+            );
+            return None;
+        }
+        let cx = &mut self.stack[depth];
+        cx.locals.push(LocalInfo { name: name.to_string(), ty, kind: LocalKind::Var, span });
+        let inner = cx.locals.len() - 1;
+        cx.scopes[0].insert(name.to_string(), inner);
+        cx.captures.push((outer, inner));
+        Some(inner)
     }
 
     // ------------------------------------------------------------ statements
@@ -1395,6 +1449,10 @@ impl<'a> Checker<'a> {
                     if let Some((en, vi)) = self.generic_variant(n) {
                         return self.construct_generic_variant(&en, vi, &[], span, expected);
                     }
+                    let module = self.cx().module;
+                    if let Some(&fidx) = self.fn_index.get(&(module, n.clone())) {
+                        return self.fn_value(fidx, expected, span);
+                    }
                     // Reported by the resolver; stay quiet here.
                     return Err(());
                 };
@@ -1498,6 +1556,7 @@ impl<'a> Checker<'a> {
             ExprKind::Tuple(elems) => self.tuple_lit(elems, expected, span),
             ExprKind::Map(pairs) => self.map_lit(pairs, expected, span),
             ExprKind::Set(elems) => self.set_lit(elems, expected, span),
+            ExprKind::Lambda { params, body } => self.lambda(params, body, expected, span),
             ExprKind::Call { callee, args } => self.call(callee, args, span, expected, ctx),
         }
     }
@@ -1681,6 +1740,9 @@ impl<'a> Checker<'a> {
     fn call(&mut self, callee: &Expr, args: &[Arg], span: Span, expected: Option<&Type>, ctx: Ctx) -> R<HExpr> {
         match &callee.kind {
             ExprKind::Name(n) => {
+                if let Some(id) = self.lookup(n) {
+                    return self.call_value(id, n, args, span);
+                }
                 let module = self.cx().module;
                 if let Some(&fidx) = self.fn_index.get(&(module, n.clone())) {
                     let list: Vec<(Option<&str>, &Expr)> = args.iter().map(|a| (a.name.as_deref(), &a.value)).collect();
@@ -1732,6 +1794,16 @@ impl<'a> Checker<'a> {
                             let pi = *pi;
                             return self.call_plugin(pi, name, args, span);
                         }
+                    }
+                }
+                // A function stored in a struct field: op.run(1, 2)
+                if let Some(Type::Struct(sid)) = self.static_type(base) {
+                    if self.structs[sid].fields.iter().any(|(f, t)| f == name && matches!(t, Type::Func(..))) {
+                        let hb = self.expr(base, None, Ctx::Borrow)?;
+                        let idx = self.structs[sid].fields.iter().position(|(f, _)| f == name).unwrap();
+                        let fty = self.structs[sid].fields[idx].1.clone();
+                        let f = he(HKind::Field(Box::new(hb), idx), fty, span);
+                        return self.call_fn_expr(f, name, args, span);
                     }
                 }
                 // Map / Set methods: m.has(k), s.add(x), ...
@@ -1974,6 +2046,203 @@ impl<'a> Checker<'a> {
             );
         };
         Ok(he(HKind::Call(id, hargs), ret, span))
+    }
+
+    fn new_closure_target(&mut self, func: FuncId, ty: Type, captures: usize) -> usize {
+        self.closures.push(ClosureTarget { func, ty, captures });
+        self.closures.len() - 1
+    }
+
+    /// `lambda x, y: body` where the parameter types come from the expected `Fn` type.
+    fn lambda(&mut self, params: &[LambdaParam], body: &Expr, expected: Option<&Type>, span: Span) -> R<HExpr> {
+        let (ptys, ret): (Vec<Type>, Type) = match expected {
+            Some(Type::Func(ps, r)) if ps.len() == params.len() => (ps.clone(), (**r).clone()),
+            Some(Type::Func(ps, _)) => {
+                return self.fail(Diagnostic::error(span, format!("This lambda takes {} parameter(s), but {} are expected here.", params.len(), ps.len())));
+            }
+            _ => {
+                return self.fail(
+                    Diagnostic::error(span, "I can't tell what type of function this lambda should be.")
+                        .help("Give it a type: `f: Fn(Int) -> Int = lambda x: x + 1`, or pass it where a function is expected."),
+                );
+            }
+        };
+        // explicit parameter types must agree with the expected ones
+        for (p, t) in params.iter().zip(ptys.iter()) {
+            if let Some(te) = &p.ty {
+                let declared = self.resolve_type(te)?;
+                if declared != *t {
+                    let (a, b) = (self.tn(&declared), self.tn(t));
+                    return self.fail(Diagnostic::error(p.span, format!("The parameter '{}' is {}, but {} is expected here.", p.name, a, b)));
+                }
+            }
+        }
+        let fty = Type::Func(ptys.clone(), Box::new(ret.clone()));
+        let (module, inst_name) = {
+            let cx = self.cx();
+            (cx.module, format!("lambda@{}", span.lo))
+        };
+        let id = self.new_func_slot();
+        self.ret_of[id] = Some(ret.clone());
+        self.stack.push(FnCtx {
+            locals: vec![],
+            scopes: vec![HashMap::new()],
+            ret: Some(ret.clone()),
+            ret_declared: true,
+            loop_depth: 0,
+            is_main: false,
+            module,
+            inst: id,
+            call_site: None,
+            lambda: true,
+            captures: vec![],
+        });
+        let env = self.add_local("<closure>", fty.clone(), LocalKind::ParamBorrow, span);
+        let mut plist = vec![env];
+        for (p, t) in params.iter().zip(ptys.iter()) {
+            let kind = if t.is_copy() { LocalKind::Var } else { LocalKind::ParamBorrow };
+            plist.push(self.add_local(&p.name, t.clone(), kind, p.span));
+        }
+        let hb = self.expr(body, if ret == Type::None { None } else { Some(&ret) }, Ctx::Value);
+        let mut stmts = vec![];
+        let mut ok = hb.is_ok();
+        if let Ok(h) = hb {
+            if ret == Type::None {
+                stmts.push(HStmt { kind: HStmtKind::Expr(h), span: body.span });
+            } else if h.ty != ret && h.ty != Type::Error {
+                let _ = self.type_mismatch::<()>(body.span, &ret, &h, "The result of the lambda");
+                ok = false;
+            } else {
+                stmts.push(HStmt { kind: HStmtKind::Return(Some(h)), span: body.span });
+            }
+        }
+        let cx = self.stack.pop().unwrap();
+        if !ok {
+            return Err(());
+        }
+        // captured values are copied out of the closure block when the lambda starts
+        let mut full = vec![];
+        for (i, (_, inner)) in cx.captures.iter().enumerate() {
+            let ty = cx.locals[*inner].ty.clone();
+            let get = he(HKind::Capture(Box::new(he(HKind::Local(env, UseMode::Borrow), fty.clone(), span)), i), ty, span);
+            full.push(HStmt { kind: HStmtKind::Let(*inner, get), span });
+        }
+        full.extend(stmts);
+        self.funcs[id] = Some(HFunc { name: inst_name, params: plist, locals: cx.locals, ret, body: full, span, is_main: false });
+        let target = self.new_closure_target(id, fty.clone(), cx.captures.len());
+        let mut caps = vec![];
+        for (outer, _) in &cx.captures {
+            let l = &self.cx().locals[*outer];
+            let (ty, name) = (l.ty.clone(), l.name.clone());
+            let _ = name;
+            caps.push(he(HKind::Local(*outer, UseMode::Borrow), ty, span));
+        }
+        Ok(he(HKind::Closure { target, captures: caps }, fty, span))
+    }
+
+    /// A named function used as a value: `apply(double, 3)`.
+    fn fn_value(&mut self, fidx: usize, expected: Option<&Type>, span: Span) -> R<HExpr> {
+        let def = self.fns[fidx].def.clone();
+        let Some(Type::Func(ptys, ret)) = expected.cloned() else {
+            return self.fail(
+                Diagnostic::error(span, format!("'{}' is a function, not a value.", def.name))
+                    .help(format!("Call it with parentheses: {}(...). To pass it as a value, the receiver needs a `Fn(...)` parameter type.", def.name)),
+            );
+        };
+        if def.params.len() != ptys.len() {
+            return self.fail(Diagnostic::error(
+                span,
+                format!("'{}' takes {} parameter(s), but a function of {} is expected here.", def.name, def.params.len(), ptys.len()),
+            ));
+        }
+        if let Some(p) = def.params.iter().find(|p| p.mode != ParamMode::Borrow) {
+            return self.fail(Diagnostic::error(span, format!("'{}' can't be used as a value: its parameter '{}' is `own` or `mut`.", def.name, p.name)));
+        }
+        let fid = self.instantiate(fidx, ptys.clone(), span)?;
+        let got = self.ret_of[fid].clone().unwrap_or(Type::None);
+        if got != *ret {
+            let (a, b) = (self.tn(&got), self.tn(&ret));
+            return self.fail(Diagnostic::error(span, format!("'{}' returns {}, but {} is expected here.", def.name, a, b)));
+        }
+        let fty = Type::Func(ptys.clone(), ret.clone());
+        let target = match self.fn_values.get(&fid) {
+            Some(&t) => t,
+            None => {
+                // a wrapper that takes the (unused) closure block first
+                let w = self.new_func_slot();
+                self.ret_of[w] = Some(*ret.clone());
+                let mut locals = vec![LocalInfo { name: "<closure>".into(), ty: fty.clone(), kind: LocalKind::ParamBorrow, span }];
+                let mut params = vec![0];
+                let mut args = vec![];
+                for (i, t) in ptys.iter().enumerate() {
+                    let kind = if t.is_copy() { LocalKind::Var } else { LocalKind::ParamBorrow };
+                    locals.push(LocalInfo { name: format!("a{}", i), ty: t.clone(), kind, span });
+                    params.push(locals.len() - 1);
+                    args.push(he(HKind::Local(locals.len() - 1, UseMode::Borrow), t.clone(), span));
+                }
+                let call = he(HKind::Call(fid, args), *ret.clone(), span);
+                let stmt = if *ret == Type::None { HStmtKind::Expr(call) } else { HStmtKind::Return(Some(call)) };
+                self.funcs[w] = Some(HFunc {
+                    name: format!("{}@value", def.name),
+                    params,
+                    locals,
+                    ret: *ret.clone(),
+                    body: vec![HStmt { kind: stmt, span }],
+                    span,
+                    is_main: false,
+                });
+                let t = self.new_closure_target(w, fty.clone(), 0);
+                self.fn_values.insert(fid, t);
+                t
+            }
+        };
+        Ok(he(HKind::Closure { target, captures: vec![] }, fty, span))
+    }
+
+    /// `f(args)` where `f` is a variable or parameter holding a function value.
+    fn call_value(&mut self, id: LocalId, name: &str, args: &[Arg], span: Span) -> R<HExpr> {
+        let ty = self.cx().locals[id].ty.clone();
+        let f = he(HKind::Local(id, UseMode::Borrow), ty, span);
+        self.call_fn_expr(f, name, args, span)
+    }
+
+    fn call_fn_expr(&mut self, f: HExpr, name: &str, args: &[Arg], span: Span) -> R<HExpr> {
+        let ty = f.ty.clone();
+        let Type::Func(ptys, ret) = ty.clone() else {
+            if ty == Type::Error {
+                return Err(());
+            }
+            let tn = self.tn(&ty);
+            return self.fail(Diagnostic::error(span, format!("'{}' is a variable of type {}, not a function, so it cannot be called.", name, tn)));
+        };
+        if let Some(a) = args.iter().find(|a| a.name.is_some()) {
+            return self.fail(Diagnostic::error(a.value.span, "Function values take their arguments by position, not by name."));
+        }
+        if args.len() != ptys.len() {
+            return self.fail(Diagnostic::error(
+                span,
+                format!("'{}' takes {} argument(s), but {} were given.", name, ptys.len(), args.len()),
+            ));
+        }
+        let mut hs = vec![];
+        let mut failed = false;
+        for (a, t) in args.iter().zip(ptys.iter()) {
+            match self.expr(&a.value, Some(t), Ctx::Borrow) {
+                Ok(h) => {
+                    if h.ty != *t && h.ty != Type::Error {
+                        let _ = self.type_mismatch::<()>(a.value.span, t, &h, "This argument");
+                        failed = true;
+                    } else {
+                        hs.push(h);
+                    }
+                }
+                Err(_) => failed = true,
+            }
+        }
+        if failed {
+            return Err(());
+        }
+        Ok(he(HKind::CallValue(Box::new(f), hs), *ret, span))
     }
 
     /// `Pair[Int, String]`: the concrete struct or enum for a generic template.

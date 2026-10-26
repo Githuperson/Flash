@@ -169,7 +169,20 @@ impl Loader {
                     }
                 }
                 Item::UsePlugin(pd) => {
-                    let Some(manifest) = crate::plugins::find_manifest(&pd.name, &dir) else {
+                    let found = match &pd.inline {
+                        Some(code) => match crate::inline_plugin::build(pd.kind, &pd.name, code) {
+                            Ok(m) => Some(m),
+                            Err(e) => {
+                                self.diags.push(
+                                    Diagnostic::error(pd.span, format!("Cannot build the plugin '{}': {}", pd.name, e))
+                                        .help("The code under `when using ... plugin` is compiled with rustc (Rust) or your C++ compiler (set CXX to choose one)."),
+                                );
+                                continue;
+                            }
+                        },
+                        None => crate::plugins::find_manifest(&pd.name, &dir),
+                    };
+                    let Some(manifest) = found else {
                         let searched: Vec<String> = crate::plugins::search_dirs(&dir).iter().map(|d| d.display().to_string()).collect();
                         self.diags.push(
                             Diagnostic::error(

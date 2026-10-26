@@ -317,3 +317,37 @@ fn plugin_calls_are_type_checked_at_compile_time() {
     assert!(!ok);
     assert!(err.contains("Cannot find the plugin manifest"), "{}", err);
 }
+
+#[test]
+fn plugins_written_inside_the_program_are_built_and_called() {
+    let root = repo_root();
+    let (b, r) = run_flash_with_plugins(&root.join("examples/plugins_inline.flash"), &[], "inline");
+    assert!(b.status.success(), "compile failed: {}", text(&b.stderr));
+    let r = r.unwrap();
+    assert_eq!(text(&r.stdout), "42\nFLASH!\ncba\n25.0\nTrue\n5\n", "stderr: {}", text(&r.stderr));
+    let err = text(&r.stderr);
+    assert!(err.contains("loaded native plugin 'mathx'") && err.contains("loaded native plugin 'textx'"), "{}", err);
+    assert!(err.contains("live allocations at exit: 0"), "{}", err);
+}
+
+#[test]
+fn inline_plugin_mistakes_are_reported() {
+    let dir = scratch_dir("inline-errors");
+    let bad_type = dir.join("bad_type.flash");
+    std::fs::write(&bad_type, "when using rust plugin \"badt\":\n    fn f(v: Vec<i64>) -> i64 { 0 }\nsay(badt.f(1))\n").unwrap();
+    let (b, _) = run_flash_with_plugins(&bad_type, &[], "inline-bad-type");
+    assert!(!b.status.success());
+    assert!(text(&b.stderr).contains("can't be passed from Flash"), "{}", text(&b.stderr));
+
+    let broken = dir.join("broken.flash");
+    std::fs::write(&broken, "when using cpp plugin \"brk\":\n    int64_t f(int64_t a) { return a +; }\nsay(brk.f(1))\n").unwrap();
+    let (b, _) = run_flash_with_plugins(&broken, &[], "inline-broken");
+    assert!(!b.status.success());
+    assert!(text(&b.stderr).contains("Cannot build the plugin 'brk'"), "{}", text(&b.stderr));
+
+    let header = dir.join("header.flash");
+    std::fs::write(&header, "when using go plugin \"x\":\n    code\n").unwrap();
+    let (b, _) = run_flash_with_plugins(&header, &[], "inline-header");
+    assert!(!b.status.success());
+    assert!(text(&b.stderr).contains("A plugin block starts with"), "{}", text(&b.stderr));
+}

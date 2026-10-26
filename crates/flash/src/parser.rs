@@ -147,6 +147,7 @@ impl<'a> Parser<'a> {
             Tok::Extern => self.extern_fn().map(Item::ExternFn),
             Tok::Import => self.import().map(Item::Import),
             Tok::Use => self.use_plugin().map(Item::UsePlugin),
+            Tok::InlinePlugin { .. } => self.inline_plugin().map(Item::UsePlugin),
             Tok::Indent => {
                 let sp = self.span();
                 // Skip the whole unexpected block.
@@ -181,6 +182,14 @@ impl<'a> Parser<'a> {
         Ok(ImportDecl { path, span })
     }
 
+    fn inline_plugin(&mut self) -> PResult<PluginDecl> {
+        let span = self.span();
+        let Tok::InlinePlugin { kind, name, code } = self.bump().tok else { unreachable!() };
+        let kind = if kind == "rust" { PluginKind::Rust } else { PluginKind::Cpp };
+        self.end_of_stmt()?;
+        Ok(PluginDecl { kind, name, inline: Some(code), span })
+    }
+
     fn use_plugin(&mut self) -> PResult<PluginDecl> {
         let start = self.bump().span;
         let (kind_name, ksp) = self.ident("`rust_plugin` or `cpp_plugin` after `use`")?;
@@ -201,7 +210,7 @@ impl<'a> Parser<'a> {
         };
         let span = start.to(self.prev_span());
         self.end_of_stmt()?;
-        Ok(PluginDecl { kind, name, span })
+        Ok(PluginDecl { kind, name, inline: None, span })
     }
 
     fn type_expr(&mut self) -> PResult<TypeExpr> {
@@ -218,6 +227,22 @@ impl<'a> Parser<'a> {
             }
             self.expect(Tok::RParen, "')' to close the tuple type")?;
             return Ok(TypeExpr { name: "Tuple".into(), args, span: sp.to(self.prev_span()) });
+        }
+        // function type: Fn(Int, Int) -> Int
+        if matches!(self.peek(), Tok::Ident(s) if s == "Fn") && matches!(self.peek_at(1), Tok::LParen) {
+            self.bump();
+            self.bump();
+            let mut args = vec![];
+            while !self.at(&Tok::RParen) {
+                args.push(self.type_expr()?);
+                if !self.eat(&Tok::Comma) {
+                    break;
+                }
+            }
+            self.expect(Tok::RParen, "')' to close the parameter types of the function type")?;
+            let ret = if self.eat(&Tok::Arrow) { self.type_expr()? } else { TypeExpr { name: "None".into(), args: vec![], span: self.prev_span() } };
+            args.push(ret);
+            return Ok(TypeExpr { name: "Fn".into(), args, span: sp.to(self.prev_span()) });
         }
         let name = match self.peek().clone() {
             Tok::Ident(s) => {
@@ -698,7 +723,41 @@ impl<'a> Parser<'a> {
     }
 
     pub fn expr(&mut self) -> PResult<Expr> {
+        if self.at(&Tok::Lambda) {
+            return self.lambda();
+        }
         self.or_expr()
+    }
+
+    /// `lambda a, b: expr` or `lambda (a: Int, b: Int): expr`
+    fn lambda(&mut self) -> PResult<Expr> {
+        let start = self.bump().span;
+        let mut params = vec![];
+        if self.eat(&Tok::LParen) {
+            while !self.at(&Tok::RParen) {
+                let psp = self.span();
+                let (name, _) = self.ident("a parameter name")?;
+                let ty = if self.eat(&Tok::Colon) { Some(self.type_expr()?) } else { None };
+                params.push(LambdaParam { name, ty, span: psp.to(self.prev_span()) });
+                if !self.eat(&Tok::Comma) {
+                    break;
+                }
+            }
+            self.expect(Tok::RParen, "')' to close the lambda parameters")?;
+        } else {
+            while !self.at(&Tok::Colon) {
+                let psp = self.span();
+                let (name, _) = self.ident("a parameter name")?;
+                params.push(LambdaParam { name, ty: None, span: psp });
+                if !self.eat(&Tok::Comma) {
+                    break;
+                }
+            }
+        }
+        self.expect(Tok::Colon, "':' before the body of the lambda")?;
+        let body = self.expr()?;
+        let span = start.to(body.span);
+        Ok(Expr { kind: ExprKind::Lambda { params, body: Box::new(body) }, span })
     }
 
     fn bin(&self, op: BinOp, l: Expr, r: Expr) -> Expr {
