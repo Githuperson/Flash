@@ -1,0 +1,220 @@
+# Flash runtime library, part: threads, atomics and channels (Linux only for now).
+#
+# Every thread has its own runtime state block (allocator free lists, output buffer, ...), found
+# through the thread pointer register, so the allocator needs no locks. Memory may be freed by a
+# different thread than the one that allocated it: it simply joins the free list of the freeing
+# thread. Data is never shared between threads; it is moved through channels.
+#
+# Thread block (one mapping): [state block: 64 KiB][guard page][stack: 8 MiB]
+# Extra slots of the state block used here:
+# 61440  the closure the thread runs     61448  thread id (the kernel clears it when the thread ends)
+# 61456  1 when output must be written through at every newline (threads, and the main thread once it has spawned one)
+# 61464  address of the state block itself (what the thread pointer reads)
+#
+# Channel object (shared, reference counted, 64 bytes):
+#     0 lock    8 sequence number (futex word)   16 reference count   24 closed
+#    32 head   40 tail   48 capacity (power of two)   56 buffer (capacity words)
+
+extern fn fl_run_closure(c: Int)
+
+# ------------------------------------------------------------------ atomics (pseudo system calls)
+fn at_cas(addr: Int, old: Int, new: Int) -> Int:
+    return __syscall(2147418113, addr, old, new, 0, 0, 0)
+
+fn at_xchg(addr: Int, new: Int) -> Int:
+    return __syscall(2147418114, addr, new, 0, 0, 0, 0)
+
+fn at_add(addr: Int, delta: Int) -> Int:
+    return __syscall(2147418115, addr, delta, 0, 0, 0, 0)
+
+fn pl_set_tp(st: Int):
+    if __arch() == 1:
+        __syscall(2147418117, st, 0, 0, 0, 0, 0)
+    else:
+        __syscall(158, 4098, st, 0, 0, 0, 0)
+
+fn pl_futex_wait(addr: Int, val: Int):
+    if __arch() == 1:
+        __syscall(98, addr, 0, val, 0, 0, 0)
+    else:
+        __syscall(202, addr, 0, val, 0, 0, 0)
+
+fn pl_futex_wake(addr: Int, n: Int):
+    if __arch() == 1:
+        __syscall(98, addr, 1, n, 0, 0, 0)
+    else:
+        __syscall(202, addr, 1, n, 0, 0, 0)
+
+fn pl_yield():
+    if __arch() == 1:
+        __syscall(124, 0, 0, 0, 0, 0, 0)
+    else:
+        __syscall(24, 0, 0, 0, 0, 0, 0)
+
+fn pl_mprotect_none(addr: Int, n: Int):
+    if __arch() == 1:
+        __syscall(226, addr, n, 0, 0, 0, 0)
+    else:
+        __syscall(10, addr, n, 0, 0, 0, 0)
+
+# ------------------------------------------------------------------ threads
+fn thread_total() -> Int:
+    return 65536 + 4096 + 8388608
+
+# Starts a thread that runs the closure and returns its handle (the thread block).
+fn fl_thread_spawn(closure: Int) -> Int:
+    me = __state()
+    # everything printed so far comes out before anything the new thread prints
+    out_flush()
+    __poke(me, 61456, 1)
+    total = thread_total()
+    mem = pl_mmap(total)
+    if mem == 0:
+        out_of_memory()
+    pl_mprotect_none(mem + 65536, 4096)
+    __poke(mem, 0, __peek(me, 0))
+    __poke(mem, 64, __peek(me, 64))
+    __poke(mem, 61440, closure)
+    __poke(mem, 61456, 1)
+    __poke(mem, 61464, mem)
+    top = mem + total
+    flags = 4001536
+    tid = 0
+    if __arch() == 1:
+        tid = __syscall(2147418116, flags, top, mem + 61448, mem, mem + 61448, mem)
+    else:
+        tid = __syscall(2147418116, flags, top, mem + 61448, mem + 61448, mem, mem)
+    if tid < 0:
+        out_flush()
+        err_str(__str("Flash runtime error: could not start a thread\n"))
+        sys_exit(101)
+    # keeps the thread's entry function in the program (the code generator starts threads in it)
+    if tid == 4611686018427387904:
+        fl_thread_entry(0)
+    return mem
+
+# The first function a new thread runs; the code generator calls it on the fresh stack.
+fn fl_thread_entry(st: Int):
+    fl_run_closure(__peek(st, 61440))
+    out_flush()
+    # (a system call here also keeps this function from being inlined, which would hide it from the code generator)
+    if __arch() == 1:
+        __syscall(124, 0, 0, 0, 0, 0, 0)
+    else:
+        __syscall(24, 0, 0, 0, 0, 0, 0)
+
+# Waits until the thread has finished, then releases its memory.
+fn fl_thread_join(h: Int):
+    out_flush()
+    while True:
+        v = __peek(h, 61448)
+        if v == 0:
+            break
+        pl_futex_wait(h + 61448, v)
+    me = __state()
+    # allocations the thread left alive (messages it sent, ...) now count for the joining thread
+    __poke(me, 24, __peek(me, 24) + __peek(h, 24))
+    pl_munmap(h, thread_total())
+
+# ------------------------------------------------------------------ channels
+fn chan_lock(c: Int):
+    while at_xchg(c, 1) != 0:
+        pl_yield()
+
+fn chan_unlock(c: Int):
+    at_xchg(c, 0)
+
+fn fl_chan_new() -> Int:
+    c = fl_alloc(64)
+    buf = fl_alloc(64)
+    i = 0
+    while i < 64:
+        __poke(c, i, 0)
+        i += 8
+    __poke(c, 16, 1)
+    __poke(c, 48, 8)
+    __poke(c, 56, buf)
+    return c
+
+fn fl_chan_retain(c: Int) -> Int:
+    at_add(c + 16, 1)
+    return c
+
+# Drops one reference; returns 1 when it was the last one.
+fn fl_chan_release(c: Int) -> Int:
+    if at_add(c + 16, -1) == 1:
+        return 1
+    return 0
+
+# The next message still queued (as a word), or 0. Used to free what nobody received.
+fn fl_chan_next(c: Int) -> Int:
+    head = __peek(c, 32)
+    if head == __peek(c, 40):
+        return 0
+    w = __peek(__peek(c, 56), (head & (__peek(c, 48) - 1)) * 8)
+    __poke(c, 32, head + 1)
+    return w
+
+fn fl_chan_free(c: Int):
+    fl_free(__peek(c, 56), __peek(c, 48) * 8)
+    fl_free(c, 64)
+
+fn fl_chan_send(c: Int, w: Int):
+    chan_lock(c)
+    head = __peek(c, 32)
+    tail = __peek(c, 40)
+    cap = __peek(c, 48)
+    buf = __peek(c, 56)
+    if tail - head == cap:
+        nbuf = fl_alloc(cap * 16)
+        i = 0
+        while i < cap:
+            __poke(nbuf, i * 8, __peek(buf, ((head + i) & (cap - 1)) * 8))
+            i += 1
+        fl_free(buf, cap * 8)
+        buf = nbuf
+        head = 0
+        tail = cap
+        cap = cap * 2
+        __poke(c, 32, 0)
+        __poke(c, 48, cap)
+        __poke(c, 56, buf)
+    __poke(buf, (tail & (cap - 1)) * 8, w)
+    __poke(c, 40, tail + 1)
+    __poke(c, 8, __peek(c, 8) + 1)
+    chan_unlock(c)
+    pl_futex_wake(c + 8, 1)
+
+fn chan_result(ok: Int, w: Int) -> Int:
+    r = fl_alloc(24)
+    __poke(r, 0, 1 - ok)
+    __poke(r, 8, w)
+    __poke(r, 16, 0)
+    if ok == 0:
+        __poke(r, 16, fl_str_clone(__str("channel closed")))
+    return r
+
+# Waits for a message: a Result block holding it, or an error once the channel is closed and empty.
+fn fl_chan_recv(c: Int) -> Int:
+    out_flush()
+    while True:
+        chan_lock(c)
+        head = __peek(c, 32)
+        if head != __peek(c, 40):
+            w = __peek(__peek(c, 56), (head & (__peek(c, 48) - 1)) * 8)
+            __poke(c, 32, head + 1)
+            chan_unlock(c)
+            return chan_result(1, w)
+        if __peek(c, 24) != 0:
+            chan_unlock(c)
+            return chan_result(0, 0)
+        seq = __peek(c, 8)
+        chan_unlock(c)
+        pl_futex_wait(c + 8, seq)
+
+fn fl_chan_close(c: Int):
+    chan_lock(c)
+    __poke(c, 24, 1)
+    __poke(c, 8, __peek(c, 8) + 1)
+    chan_unlock(c)
+    pl_futex_wake(c + 8, 2147483647)

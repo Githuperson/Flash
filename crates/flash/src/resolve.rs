@@ -219,7 +219,7 @@ impl<'a> Resolver<'a> {
     fn type_expr(&mut self, t: &TypeExpr) {
         use crate::types::IntTy;
         let known = IntTy::from_name(&t.name).is_some()
-            || matches!(t.name.as_str(), "Float" | "f64" | "Bool" | "String" | "None" | "List" | "Result" | "Tuple" | "Map" | "Set" | "Fn")
+            || matches!(t.name.as_str(), "Float" | "f64" | "Bool" | "String" | "None" | "List" | "Result" | "Tuple" | "Map" | "Set" | "Fn" | "Thread" | "Channel")
             || self.structs.contains_key(&t.name)
             || self.tparams.contains(&t.name);
         if !known {

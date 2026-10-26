@@ -83,6 +83,11 @@ fn lower_with(prog: &Program, keep_names: bool, target_os: i64) -> Module {
         let func = FnLower::lower_func(&mut lw, f, i);
         lw.m.funcs[i] = func;
     }
+    if !keep_names {
+        // the runtime's thread entry runs a function value of type Fn() through this
+        let f = FnLower::lower_runner(&mut lw);
+        lw.m.funcs.push(f);
+    }
     lw.m
 }
 
@@ -201,9 +206,10 @@ fn body_mutates(stmts: &[HStmt], xs: LocalId) -> bool {
                 (matches!(b, Builtin::Append | Builtin::Pop) && args.first().and_then(root) == Some(xs)) || args.iter().any(|a| expr(a, xs))
             }
             HKind::Call(_, args) => args.iter().any(|a| root(a) == Some(xs) && !a.ty.is_copy() || expr(a, xs)),
-            HKind::PluginCall { args, .. } | HKind::ExternCall { args, .. } | HKind::Struct(args) | HKind::List(args) | HKind::SetLit(args) | HKind::Variant { fields: args, .. } => {
+            HKind::PluginCall { args, .. } | HKind::ExternCall { args, .. } | HKind::Struct(args) | HKind::List(args) | HKind::SetLit(args) | HKind::Variant { fields: args, .. } | HKind::Closure { captures: args, .. } => {
                 args.iter().any(|a| expr(a, xs))
             }
+            HKind::CallValue(f, args) => expr(f, xs) || args.iter().any(|a| expr(a, xs)),
             HKind::MapLit(pairs) => pairs.iter().any(|(k, v)| expr(k, xs) || expr(v, xs)),
             HKind::Unary(_, a) | HKind::Cast(a) | HKind::Try(a) | HKind::Field(a, _) | HKind::EnumTag(a) | HKind::EnumField(a, _, _) => expr(a, xs),
             HKind::Binary(_, a, b) | HKind::Logic(_, a, b) | HKind::Index(a, b) => expr(a, xs) || expr(b, xs),
@@ -243,7 +249,8 @@ fn collect_moves_expr(e: &HExpr, out: &mut HashSet<LocalId>) {
             collect_moves_expr(a, out);
             collect_moves_expr(b, out);
         }
-        HKind::Call(_, args)
+        HKind::Closure { captures: args, .. }
+        | HKind::Call(_, args)
         | HKind::Builtin(_, args)
         | HKind::Struct(args)
         | HKind::Variant { fields: args, .. }
@@ -261,6 +268,13 @@ fn collect_moves_expr(e: &HExpr, out: &mut HashSet<LocalId>) {
                 collect_moves_expr(v, out);
             }
         }
+        HKind::CallValue(f, args) => {
+            collect_moves_expr(f, out);
+            for a in args {
+                collect_moves_expr(a, out);
+            }
+        }
+        HKind::Capture(a, _) => collect_moves_expr(a, out),
         _ => {}
     }
 }
@@ -507,6 +521,17 @@ impl<'a, 'p> FnLower<'a, 'p> {
         fl.f
     }
 
+    /// `fl_run_closure(c)`: call the `Fn()` closure `c` and free its block (used by new threads).
+    fn lower_runner(lw: &'a mut Lowerer<'p>) -> Function {
+        let mut fl = FnLower::new(lw, "fl_run_closure".into(), vec![Ty::I64], None);
+        let fty = Type::Func(vec![], Box::new(Type::None));
+        fl.dispatch(0, vec![], &fty, &Type::None);
+        let sz = fl.iconst(Ty::I64, fl.closure_block());
+        fl.rt("fl_free", &[0, sz]);
+        fl.term(Term::Ret(None));
+        fl.f
+    }
+
     fn lower_glue(lw: &'a mut Lowerer<'p>, kind: GlueKind, ty: &Type, idx: FuncRef) -> Function {
         let name = format!("{}_{}", if kind == GlueKind::Drop { "drop" } else { "clone" }, idx);
         let ret = if kind == GlueKind::Clone { Some(Ty::I64) } else { None };
@@ -577,6 +602,34 @@ impl<'a, 'p> FnLower<'a, 'p> {
             Type::Func(..) => {
                 let sz = self.iconst(Ty::I64, self.closure_block());
                 self.rt("fl_free", &[p, sz]);
+            }
+            Type::Chan(et) => {
+                // the last reference frees the queue and whatever nobody received
+                let last = self.rtv("fl_chan_release", &[p]);
+                let one = self.iconst(Ty::I64, 1);
+                let is_last = self.cmp(CmpOp::Eq, last, one);
+                let yes = self.new_block();
+                let done = self.new_block();
+                self.branch(is_last, yes, done);
+                self.switch(yes);
+                if et.is_owned() {
+                    let head = self.new_block();
+                    let body = self.new_block();
+                    let exit = self.new_block();
+                    self.jump_to(head);
+                    self.switch(head);
+                    let w = self.rtv("fl_chan_next", &[p]);
+                    let z = self.iconst(Ty::I64, 0);
+                    let any = self.cmp(CmpOp::Ne, w, z);
+                    self.branch(any, body, exit);
+                    self.switch(body);
+                    self.emit_drop(et, w);
+                    self.jump_to(head);
+                    self.switch(exit);
+                }
+                self.rt("fl_chan_free", &[p]);
+                self.jump_to(done);
+                self.switch(done);
             }
             Type::Map(..) | Type::Set(_) => self.drop_map(ty, p),
             Type::Enum(eid) => {
@@ -716,6 +769,7 @@ impl<'a, 'p> FnLower<'a, 'p> {
                 }
                 new
             }
+            Type::Chan(_) => self.rtv("fl_chan_retain", &[p]),
             Type::Map(..) | Type::Set(_) => self.clone_map(ty, p),
             Type::Enum(eid) => {
                 let info = self.lw.prog.enums[*eid].clone();
@@ -1303,8 +1357,13 @@ impl<'a, 'p> FnLower<'a, 'p> {
     fn call_value(&mut self, f: &HExpr, args: &[HExpr], e: &HExpr) -> VReg {
         let env = self.borrow(f);
         let argv: Vec<VReg> = args.iter().map(|a| self.borrow(a)).collect();
-        let targets: Vec<usize> = (0..self.lw.prog.closures.len()).filter(|&i| self.lw.prog.closures[i].ty == f.ty).collect();
-        let rty = e.ty.clone();
+        self.dispatch(env, argv, &f.ty, &e.ty)
+    }
+
+    /// Jump to the function behind closure block `env`, choosing among the targets of type `fty`.
+    fn dispatch(&mut self, env: VReg, argv: Vec<VReg>, fty: &Type, rty: &Type) -> VReg {
+        let targets: Vec<usize> = (0..self.lw.prog.closures.len()).filter(|&i| self.lw.prog.closures[i].ty == *fty).collect();
+        let rty = rty.clone();
         let res = if rty == Type::None { None } else { Some(self.vreg(ir_ty(&rty))) };
         if targets.is_empty() {
             // no function of this type exists, so this call can never run

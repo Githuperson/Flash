@@ -37,6 +37,8 @@ pub struct FnCtx {
     pub lambda: bool,
     /// (local of the enclosing function, its copy in this lambda)
     pub captures: Vec<(LocalId, LocalId)>,
+    /// A lambda passed straight to `spawn`: it takes ownership of the strings, lists, ... it uses.
+    pub moving: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -60,6 +62,8 @@ pub struct Checker<'a> {
     /// type parameters in scope while a generic's fields are resolved
     pub tsubst: HashMap<String, Type>,
     pub closures: Vec<ClosureTarget>,
+    /// set by `spawn` for the lambda it is about to check
+    pub move_lambda: bool,
     /// function -> closure target of the wrapper that lets it be used as a value
     pub fn_values: HashMap<FuncId, usize>,
     pub fns: Vec<FnItem>,
@@ -85,6 +89,7 @@ pub fn check_program(mods: &[LoadedModule], plugins: &[PluginBinding], diags: &m
         generic_enums: HashMap::new(),
         tsubst: HashMap::new(),
         closures: vec![],
+        move_lambda: false,
         fn_values: HashMap::new(),
         fns: vec![],
         fn_index: HashMap::new(),
@@ -299,6 +304,7 @@ impl<'a> Checker<'a> {
             call_site: None,
             lambda: false,
             captures: vec![],
+            moving: false,
         });
         let mut body = vec![];
         let root = &self.mods[0].ast;
@@ -395,6 +401,14 @@ impl<'a> Checker<'a> {
                 } else {
                     Ok(Type::Set(Box::new(key)))
                 }
+            }
+            "Thread" => self.no_args(t, Type::Thread),
+            "Channel" => {
+                if t.args.len() != 1 {
+                    return self.fail(Diagnostic::error(t.span, "Channel needs one type argument.").help("For example: Channel[Int]"));
+                }
+                let inner = self.resolve_type(&t.args[0])?;
+                Ok(Type::Chan(Box::new(inner)))
             }
             "Fn" => {
                 let mut tys = vec![];
@@ -985,6 +999,7 @@ impl<'a> Checker<'a> {
             },
             lambda: false,
             captures: vec![],
+            moving: false,
         });
         let mut params = vec![];
         for (p, ty) in def.params.iter().zip(arg_tys.iter()) {
@@ -1059,7 +1074,7 @@ impl<'a> Checker<'a> {
             let l = &self.stack[depth - 1].locals[outer];
             (l.ty.clone(), l.span)
         };
-        if !ty.is_copy() {
+        if !ty.is_copy() && !self.stack[depth].moving {
             let tn = self.tn(&ty);
             self.error(
                 Diagnostic::error(span, format!("A lambda can only use numbers and Bool from outside itself, but '{}' is {}.", name, tn)).help(
@@ -1245,6 +1260,10 @@ impl<'a> Checker<'a> {
             }
             ForIter::Expr(e) => {
                 let mut list = self.expr(e, None, Ctx::Borrow)?;
+                // Looping over a Channel receives messages until it is closed and empty.
+                if let Type::Chan(t) = list.ty.clone() {
+                    return self.for_channel(var, var_span, list, *t, body, span, out);
+                }
                 // Looping over a Map visits its keys, over a Set its items (in insertion order).
                 match list.ty.clone() {
                     Type::Map(k, _) => list = self.mk_builtin(Builtin::MapKeys, vec![list], Type::List(k), e.span),
@@ -1279,6 +1298,34 @@ impl<'a> Checker<'a> {
                 out.push(HStmt { kind: HStmtKind::ForList { var: v, list, body: b }, span });
             }
         }
+        Ok(())
+    }
+
+    /// `for x in channel:` becomes a loop that receives, stops at the "closed" error and binds x.
+    fn for_channel(&mut self, var: &str, var_span: Span, mut chan: HExpr, elem: Type, body: &[Stmt], span: Span, out: &mut Vec<HStmt>) -> R<()> {
+        if !is_place(&chan) {
+            let tmp = self.add_local("<iter>", chan.ty.clone(), LocalKind::Var, span);
+            let cty = chan.ty.clone();
+            out.push(HStmt { kind: HStmtKind::Let(tmp, chan), span });
+            chan = he(HKind::Local(tmp, UseMode::Borrow), cty, span);
+        }
+        let rty = Type::Result(Box::new(elem.clone()));
+        self.cx().scopes.push(HashMap::new());
+        let r = self.add_local("<received>", rty.clone(), LocalKind::Var, span);
+        let mut stmts = vec![HStmt { kind: HStmtKind::Let(r, self.mk_builtin(Builtin::ChanRecv, vec![chan], rty.clone(), span)), span }];
+        let local_r = |mode| he(HKind::Local(r, mode), rty.clone(), span);
+        let ok = self.mk_builtin(Builtin::IsOk, vec![local_r(UseMode::Borrow)], Type::Bool, span);
+        let not_ok = he(HKind::Unary(crate::ast::UnOp::Not, Box::new(ok)), Type::Bool, span);
+        stmts.push(HStmt { kind: HStmtKind::If(not_ok, vec![HStmt { kind: HStmtKind::Break, span }], vec![]), span });
+        let v = self.add_local(var, elem.clone(), LocalKind::Var, var_span);
+        let value = self.mk_builtin(Builtin::Unwrap, vec![local_r(UseMode::Move)], elem, span);
+        stmts.push(HStmt { kind: HStmtKind::Let(v, value), span });
+        self.cx().loop_depth += 1;
+        let b = self.block(body);
+        self.cx().loop_depth -= 1;
+        self.cx().scopes.pop();
+        stmts.extend(b);
+        out.push(HStmt { kind: HStmtKind::While(he(HKind::Bool(true), Type::Bool, span), stmts), span });
         Ok(())
     }
 
@@ -1872,7 +1919,7 @@ impl<'a> Checker<'a> {
     }
 
     /// The type of a simple expression (variable, field, element) without checking it, or None.
-    fn static_type(&mut self, e: &Expr) -> Option<Type> {
+    pub(crate) fn static_type(&mut self, e: &Expr) -> Option<Type> {
         match &e.kind {
             ExprKind::Name(n) => {
                 let id = self.lookup(n)?;
@@ -2077,6 +2124,7 @@ impl<'a> Checker<'a> {
                 }
             }
         }
+        let moving = std::mem::take(&mut self.move_lambda);
         let fty = Type::Func(ptys.clone(), Box::new(ret.clone()));
         let (module, inst_name) = {
             let cx = self.cx();
@@ -2096,6 +2144,7 @@ impl<'a> Checker<'a> {
             call_site: None,
             lambda: true,
             captures: vec![],
+            moving,
         });
         let env = self.add_local("<closure>", fty.clone(), LocalKind::ParamBorrow, span);
         let mut plist = vec![env];
@@ -2133,9 +2182,17 @@ impl<'a> Checker<'a> {
         let mut caps = vec![];
         for (outer, _) in &cx.captures {
             let l = &self.cx().locals[*outer];
-            let (ty, name) = (l.ty.clone(), l.name.clone());
-            let _ = name;
-            caps.push(he(HKind::Local(*outer, UseMode::Borrow), ty, span));
+            let (ty, name, kind) = (l.ty.clone(), l.name.clone(), l.kind);
+            if ty.is_copy() {
+                caps.push(he(HKind::Local(*outer, UseMode::Borrow), ty, span));
+            } else if !kind.owns() {
+                return self.fail(
+                    Diagnostic::error(span, format!("'{}' is only borrowed here, so it can't be moved into the thread.", name))
+                        .help(format!("Make a copy for the thread: `copy({})`, or take the parameter with `own`.", name)),
+                );
+            } else {
+                caps.push(he(HKind::Local(*outer, UseMode::Move), ty, span));
+            }
         }
         Ok(he(HKind::Closure { target, captures: caps }, fty, span))
     }

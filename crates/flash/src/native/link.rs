@@ -14,6 +14,7 @@ pub fn runtime_source() -> String {
         include_str!("../../runtime/sys.flash"),
         include_str!("../../runtime/text.flash"),
         include_str!("../../runtime/map.flash"),
+        include_str!("../../runtime/thread.flash"),
         include_str!("../../runtime/float.flash"),
         include_str!("../../runtime/math.flash"),
         include_str!("../../runtime/io.flash"),
@@ -56,7 +57,7 @@ pub fn link(mut user: Module, mut rt: Module, release: bool) -> Result<Module, S
     let mut by_name: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
     for (i, f) in user.funcs.iter().enumerate() {
         // User functions are `name_N`; only runtime functions and `flash_main` are visible by name.
-        if (i as u32) >= fbase || f.name == "flash_main" {
+        if (i as u32) >= fbase || f.name == "flash_main" || f.name == "fl_run_closure" {
             by_name.insert(f.name.clone(), i as u32);
         }
     }

@@ -1,0 +1,27 @@
+# Threads and channels (Linux for now): four workers square numbers sent to them.
+fn worker(jobs: Channel[Int], results: Channel[Int]):
+    for n in jobs:                  # receives until the channel is closed and empty
+        send(results, n * n)
+
+jobs: Channel[Int] = channel()
+results: Channel[Int] = channel()
+
+threads: List[Thread] = []
+for i in 0..4:
+    j = copy(jobs)                  # copy(channel) shares it: every copy is another handle
+    r = copy(results)
+    append(threads, spawn(lambda: worker(j, r)))   # the lambda takes j and r with it
+
+for n in 1..=10:
+    send(jobs, n)
+close(jobs)
+
+while len(threads) > 0:
+    t = pop(threads)
+    t.join()
+close(results)
+
+total = 0
+for v in results:
+    total += v
+say("sum of squares:", total)

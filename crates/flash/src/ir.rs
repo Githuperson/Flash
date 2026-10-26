@@ -194,6 +194,11 @@ pub enum Inst {
         dst: VReg,
         data: DataId,
     },
+    /// The calling thread's runtime state block (Linux only): the thread pointer register
+    /// (`fs` base on x86-64, `tpidr_el0` on AArch64) holds it.
+    ThreadPtr {
+        dst: VReg,
+    },
     /// Address of a function-local stack slot.
     StackAddr {
         dst: VReg,

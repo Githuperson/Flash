@@ -1,0 +1,3 @@
+t = spawn(lambda: say("hi"))
+t.join()
+t.join()

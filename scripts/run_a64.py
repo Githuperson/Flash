@@ -129,7 +129,7 @@ def main():
             ln = (a[1] + 0xFFF) & ~0xFFF
             addr = mmap_next[0]; mmap_next[0] += ln + 0x1000
             mu.mem_map(addr, ln); r = addr
-        elif n == 215:
+        elif n in (215, 98, 124, 226):  # munmap, futex (nothing ever waits: one thread), sched_yield, mprotect
             r = 0
         elif n in (93, 94):
             state['exit'] = sg(a[0]) & 0xFF; mu.emu_stop(); return

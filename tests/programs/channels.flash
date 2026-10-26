@@ -1,0 +1,36 @@
+# Channels used from one thread (queueing, closing, owned messages, sharing a handle)
+ch: Channel[Int] = channel()
+for i in 0..20:
+    send(ch, i * i)
+say(unwrap(recv(ch)), unwrap(recv(ch)), unwrap(recv(ch)))
+other = copy(ch)
+send(other, 1000)
+close(ch)
+total = 0
+for v in ch:
+    total += v
+say(total)
+say(is_ok(recv(ch)))
+
+names: Channel[String] = channel()
+send(names, "ana")
+send(names, f"bo{1 + 1}")
+send(names, "cy")
+close(names)
+for n in names:
+    say(n)
+
+ratios: Channel[Float] = channel()
+send(ratios, 0.5)
+send(ratios, 2.25)
+say(unwrap(recv(ratios)) + unwrap(recv(ratios)))
+
+flags: Channel[Bool] = channel()
+send(flags, True)
+send(flags, False)
+say(unwrap(recv(flags)), unwrap(recv(flags)))
+
+# messages nobody receives are freed with the channel
+leftover: Channel[List[String]] = channel()
+send(leftover, ["a", "b"])
+send(leftover, ["c"])

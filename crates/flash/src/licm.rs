@@ -23,6 +23,7 @@ fn def_of(i: &Inst) -> Option<VReg> {
         | Inst::Load { dst, .. }
         | Inst::LoadIdx { dst, .. }
         | Inst::DataAddr { dst, .. }
+        | Inst::ThreadPtr { dst }
         | Inst::StackAddr { dst, .. }
         | Inst::Select { dst, .. } => Some(*dst),
         Inst::Call { dst, .. } => *dst,
@@ -32,7 +33,7 @@ fn def_of(i: &Inst) -> Option<VReg> {
 
 fn uses(i: &Inst) -> Vec<VReg> {
     match i {
-        Inst::IConst { .. } | Inst::FConst { .. } | Inst::DataAddr { .. } | Inst::StackAddr { .. } => vec![],
+        Inst::IConst { .. } | Inst::FConst { .. } | Inst::DataAddr { .. } | Inst::ThreadPtr { .. } | Inst::StackAddr { .. } => vec![],
         Inst::Copy { src, .. } | Inst::Cast { src, .. } => vec![*src],
         Inst::Un { a, .. } => vec![*a],
         Inst::Bin { a, b, .. } | Inst::Cmp { a, b, .. } => vec![*a, *b],
@@ -255,7 +256,7 @@ fn peel_invariant_prefix(f: &mut Function, cfg: &Cfg, l: &Loop) -> Option<usize>
             let kind_ok = match inst {
                 Inst::IConst { .. } | Inst::FConst { .. } | Inst::Copy { .. } => true,
                 Inst::Bin { op, .. } => !matches!(op, BinOp::SDiv | BinOp::UDiv | BinOp::SRem | BinOp::URem),
-                Inst::Cmp { .. } | Inst::Un { .. } | Inst::Cast { .. } | Inst::Select { .. } | Inst::DataAddr { .. } | Inst::StackAddr { .. } => true,
+                Inst::Cmp { .. } | Inst::Un { .. } | Inst::Cast { .. } | Inst::Select { .. } | Inst::DataAddr { .. } | Inst::ThreadPtr { .. } | Inst::StackAddr { .. } => true,
                 Inst::Load { tag, off, .. } => !sum.clobbers(*tag) && (0..4096).contains(off),
                 _ => false,
             };
@@ -364,7 +365,7 @@ fn hoist_loop(f: &mut Function, cfg: &Cfg, l: &Loop) -> bool {
                 }
                 let ok = match inst {
                     Inst::Bin { op, .. } => !matches!(op, BinOp::SDiv | BinOp::UDiv | BinOp::SRem | BinOp::URem),
-                    Inst::Cmp { .. } | Inst::Un { .. } | Inst::Cast { .. } | Inst::Select { .. } | Inst::DataAddr { .. } | Inst::StackAddr { .. } => true,
+                    Inst::Cmp { .. } | Inst::Un { .. } | Inst::Cast { .. } | Inst::Select { .. } | Inst::DataAddr { .. } | Inst::ThreadPtr { .. } | Inst::StackAddr { .. } => true,
                     Inst::Load { tag, off, .. } => !sum.clobbers(*tag) && (0..4096).contains(off) && runs_before_exit(b),
                     // constants are rematerialised for free; copies gain nothing
                     _ => false,

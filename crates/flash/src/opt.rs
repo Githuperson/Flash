@@ -93,6 +93,7 @@ fn def_of(i: &Inst) -> Option<VReg> {
         | Inst::Load { dst, .. }
         | Inst::LoadIdx { dst, .. }
         | Inst::DataAddr { dst, .. }
+        | Inst::ThreadPtr { dst }
         | Inst::StackAddr { dst, .. }
         | Inst::Select { dst, .. } => Some(*dst),
         Inst::Call { dst, .. } => *dst,
@@ -102,7 +103,7 @@ fn def_of(i: &Inst) -> Option<VReg> {
 
 fn for_uses(i: &mut Inst, mut f: impl FnMut(&mut VReg)) {
     match i {
-        Inst::IConst { .. } | Inst::FConst { .. } | Inst::DataAddr { .. } | Inst::StackAddr { .. } => {}
+        Inst::IConst { .. } | Inst::FConst { .. } | Inst::DataAddr { .. } | Inst::ThreadPtr { .. } | Inst::StackAddr { .. } => {}
         Inst::Copy { src, .. } | Inst::Cast { src, .. } => f(src),
         Inst::Un { a, .. } => f(a),
         Inst::Bin { a, b, .. } | Inst::Cmp { a, b, .. } => {
@@ -750,7 +751,7 @@ fn splice(f: &mut Function, bi: usize, ii: usize, dst: Option<VReg>, args: &[VRe
 fn remap_inst(i: &mut Inst, vbase: u32, sbase: u32) {
     match i {
         Inst::LoadIdx { .. } | Inst::StoreIdx { .. } => unreachable!("indexed memory instructions are created after inlining"),
-        Inst::IConst { dst, .. } | Inst::FConst { dst, .. } | Inst::DataAddr { dst, .. } => *dst += vbase,
+        Inst::IConst { dst, .. } | Inst::FConst { dst, .. } | Inst::DataAddr { dst, .. } | Inst::ThreadPtr { dst } => *dst += vbase,
         Inst::StackAddr { dst, slot } => {
             *dst += vbase;
             *slot += sbase;
@@ -869,6 +870,7 @@ fn set_def(i: &mut Inst, nd: VReg) {
         | Inst::Load { dst, .. }
         | Inst::LoadIdx { dst, .. }
         | Inst::DataAddr { dst, .. }
+        | Inst::ThreadPtr { dst }
         | Inst::StackAddr { dst, .. }
         | Inst::Select { dst, .. } => *dst = nd,
         Inst::Call { dst, .. } => *dst = Some(nd),

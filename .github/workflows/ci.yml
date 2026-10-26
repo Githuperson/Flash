@@ -35,6 +35,18 @@ jobs:
       - name: Flash self-tests
         run: ./target/debug/flash test tests/flash
 
+  # Real AArch64 Linux hardware: programs (including threads and channels, which the emulator
+  # cannot run) are compiled by the native back end and run.
+  linux-arm64:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build
+        run: cargo build -p flash
+      - name: Programs and error messages
+        run: cargo test -p flash --test programs --test errors
+
   # Windows: the compiler builds and its output runs natively (the Cargo test suite itself has
   # Unix assumptions and is not run here; the programs below are compared with their expected output).
   windows:

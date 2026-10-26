@@ -67,6 +67,10 @@ pub enum Type {
     Map(Box<Type>, Box<Type>),
     /// `Set[T]`: an insertion-ordered hash set.
     Set(Box<Type>),
+    /// A running thread, as returned by `spawn`; `join` waits for it.
+    Thread,
+    /// `Channel[T]`: a shared, reference-counted queue of messages of type T.
+    Chan(Box<Type>),
     /// `Fn(A, B) -> R`: a function value, a heap block `[id][captured values]`.
     Func(Vec<Type>, Box<Type>),
     /// Poison type that suppresses follow-up errors.
@@ -93,7 +97,7 @@ impl Type {
             Type::Int(i) => (i.bits / 8) as u32,
             Type::Float => 8,
             Type::Bool | Type::None | Type::Error => 1,
-            Type::Str | Type::List(_) | Type::Struct(_) | Type::Enum(_) | Type::Result(_) | Type::Map(..) | Type::Set(_) | Type::Func(..) => 8,
+            Type::Str | Type::List(_) | Type::Struct(_) | Type::Enum(_) | Type::Result(_) | Type::Map(..) | Type::Set(_) | Type::Func(..) | Type::Thread | Type::Chan(_) => 8,
         }
     }
 }
@@ -175,6 +179,8 @@ pub fn display(t: &Type, structs: &[StructInfo], enums: &[EnumInfo]) -> String {
         Type::Result(e) => format!("Result[{}]", display(e, structs, enums)),
         Type::Map(k, v) => format!("Map[{}, {}]", display(k, structs, enums), display(v, structs, enums)),
         Type::Set(e) => format!("Set[{}]", display(e, structs, enums)),
+        Type::Thread => "Thread".into(),
+        Type::Chan(e) => format!("Channel[{}]", display(e, structs, enums)),
         Type::Func(ps, r) => {
             let ps: Vec<String> = ps.iter().map(|p| display(p, structs, enums)).collect();
             format!("Fn({}) -> {}", ps.join(", "), display(r, structs, enums))

@@ -96,6 +96,25 @@ impl Target {
     }
 }
 
+/// Pseudo system-call numbers (native back end only; Linux). They are handled by the code
+/// generators, not the kernel, and use the register convention of `Callee::Syscall`.
+pub mod pseudo {
+    pub const BASE: i64 = 0x7fff_0000;
+    /// (address, expected, new) -> previous value; atomic compare-and-swap
+    pub const CAS: i64 = BASE + 1;
+    /// (address, new) -> previous value; atomic exchange
+    pub const XCHG: i64 = BASE + 2;
+    /// (address, delta) -> previous value; atomic add
+    pub const FADD: i64 = BASE + 3;
+    /// Start a thread. x86-64: (flags, stack, ptid, ctid, tls, arg); AArch64: (flags, stack, ptid, tls, ctid, arg).
+    /// The child calls `THREAD_ENTRY(arg)` on the new stack and then exits. Returns the thread id.
+    pub const CLONE: i64 = BASE + 4;
+    /// Set the thread pointer register (AArch64).
+    pub const SET_TP: i64 = BASE + 5;
+    /// Name of the runtime function every new thread starts in.
+    pub const THREAD_ENTRY: &str = "fl_thread_entry";
+}
+
 /// Name of the function the process entry point calls with the initial stack pointer.
 pub const ENTRY_FN: &str = "fl_start";
 

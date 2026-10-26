@@ -87,6 +87,16 @@ pub const RT_FUNCS: &[(&str, &[Ty], Option<Ty>)] = &[
 /// Rust runtime has no maps or sets).
 pub const NATIVE_ONLY_FUNCS: &[(&str, &[Ty], Option<Ty>)] = &[
     ("fl_panic_key", &[], None),
+    ("fl_thread_spawn", &[I], Some(I)),
+    ("fl_thread_join", &[I], None),
+    ("fl_chan_new", &[], Some(I)),
+    ("fl_chan_retain", &[I], Some(I)),
+    ("fl_chan_release", &[I], Some(I)),
+    ("fl_chan_next", &[I], Some(I)),
+    ("fl_chan_free", &[I], None),
+    ("fl_chan_send", &[I, I], None),
+    ("fl_chan_recv", &[I], Some(I)),
+    ("fl_chan_close", &[I], None),
     ("fl_map_new", &[I], Some(I)),
     ("fl_map_find", &[I, I, I], Some(I)),
     ("fl_map_insert", &[I, I, I], Some(I)),

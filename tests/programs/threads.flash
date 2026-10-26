@@ -1,0 +1,71 @@
+# Threads and channels: spawn, join, send / recv, and `for x in channel`
+fn square(n: Int) -> Int:
+    return n * n
+
+# one worker: reads jobs until the channel is closed, sends results back
+fn worker(jobs: Channel[Int], results: Channel[Int]):
+    for n in jobs:
+        send(results, square(n))
+
+jobs: Channel[Int] = channel()
+results: Channel[Int] = channel()
+threads: List[Thread] = []
+for i in 0..4:
+    j = copy(jobs)
+    r = copy(results)
+    append(threads, spawn(lambda: worker(j, r)))
+
+for n in 1..=100:
+    send(jobs, n)
+close(jobs)
+
+while len(threads) > 0:
+    t = pop(threads)
+    t.join()
+close(results)
+
+total = 0
+count = 0
+for v in results:
+    total += v
+    count += 1
+say(count, total)
+
+# owned messages move between threads
+words: Channel[String] = channel()
+tx = copy(words)
+name = "flash"
+producer = spawn(lambda: send(tx, f"hello from a thread, {name}"))
+msg = recv(words)
+say(unwrap(msg))
+producer.join()
+
+# a thread that blocks until main sends something
+ping: Channel[Int] = channel()
+pong: Channel[Int] = channel()
+p1 = copy(ping)
+p2 = copy(pong)
+echo = spawn(lambda: send(p2, unwrap(recv(p1)) + 1))
+send(ping, 41)
+say(unwrap(recv(pong)))
+echo.join()
+
+# receiving from a closed, empty channel is an error, not a hang
+done: Channel[Int] = channel()
+close(done)
+r = recv(done)
+say(is_ok(r))
+
+# a lot of messages in one go
+big: Channel[Int] = channel()
+btx = copy(big)
+filler = spawn(lambda: fill_channel(btx, 20000))
+sum = 0
+for k in 0..20000:
+    sum += unwrap(recv(big))
+filler.join()
+say(sum)
+
+fn fill_channel(ch: Channel[Int], n: Int):
+    for i in 0..n:
+        send(ch, i)

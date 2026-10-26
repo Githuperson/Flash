@@ -682,6 +682,11 @@ impl<'m> Cg<'m> {
                 self.fix.data.push((at, *data));
                 self.commit(st, *dst, rd);
             }
+            Inst::ThreadPtr { dst } => {
+                let rd = self.def_reg(st, *dst);
+                self.a.word(0xD53B_D040 | rd as u32); // mrs rd, tpidr_el0
+                self.commit(st, *dst, rd);
+            }
             Inst::StackAddr { dst, slot } => {
                 let rd = self.def_reg(st, *dst);
                 let off = st.slot_off[*slot as usize];
@@ -1082,6 +1087,64 @@ impl<'m> Cg<'m> {
     }
 
     // -------------------------------------------------------------- calls
+    /// The pseudo system calls of `native::pseudo` (arguments are already in x0..x5).
+    fn pseudo_syscall(&mut self, num: i64) -> Result<(), String> {
+        use super::pseudo::*;
+        if self.target.os != super::Os::Linux {
+            return Err("this program uses threads or channels, which are only supported on Linux so far".into());
+        }
+        // cbnz w5, back `n` words
+        let cbnz_w5_back = |n: u32| 0x3500_0000u32 | (((0u32.wrapping_sub(n)) & 0x7_FFFF) << 5) | 5;
+        match num {
+            CAS => {
+                self.a.word(0xC85F_FC04); // ldaxr x4, [x0]
+                self.a.word(0xEB01_009F); // cmp x4, x1
+                self.a.word(0x5400_0081); // b.ne +4 words (to clrex)
+                self.a.word(0xC805_FC02); // stlxr w5, x2, [x0]
+                self.a.word(cbnz_w5_back(4)); // cbnz w5, ldaxr
+                self.a.word(0x1400_0002); // b +2 words (skip clrex)
+                self.a.word(0xD503_305F); // clrex
+                self.a.word(0xAA04_03E0); // mov x0, x4
+            }
+            XCHG => {
+                self.a.word(0xC85F_FC04); // ldaxr x4, [x0]
+                self.a.word(0xC805_FC01); // stlxr w5, x1, [x0]
+                self.a.word(cbnz_w5_back(2));
+                self.a.word(0xAA04_03E0); // mov x0, x4
+            }
+            FADD => {
+                self.a.word(0xC85F_FC04); // ldaxr x4, [x0]
+                self.a.word(0x8B01_0082); // add x2, x4, x1
+                self.a.word(0xC805_FC02); // stlxr w5, x2, [x0]
+                self.a.word(cbnz_w5_back(3));
+                self.a.word(0xAA04_03E0); // mov x0, x4
+            }
+            SET_TP => self.a.word(0xD51B_D040), // msr tpidr_el0, x0
+            CLONE => {
+                let entry = self
+                    .m
+                    .funcs
+                    .iter()
+                    .position(|f| f.name == THREAD_ENTRY)
+                    .ok_or("internal error: the runtime has no thread entry function")?;
+                let parent = self.a.new_label();
+                self.a.mov_imm(8, 220);
+                self.a.svc(0);
+                self.a.cbnz(0, parent);
+                // the child: argument (x5) in x0, call the entry, exit the thread
+                self.a.mov(0, 5);
+                let at = self.a.bl_patch();
+                self.fix.calls.push((at, entry as u32));
+                self.a.mov_imm(8, 93);
+                self.a.mov_imm(0, 0);
+                self.a.svc(0);
+                self.a.bind(parent);
+            }
+            _ => return Err(format!("internal error: unknown pseudo system call {}", num)),
+        }
+        Ok(())
+    }
+
     fn call(&mut self, st: &FnState, dst: Option<VReg>, callee: &Callee, args: &[VReg]) -> Result<(), String> {
         if let Callee::Syscall = callee {
             // args[0] = number, args[1..] = up to six arguments in x0–x5
@@ -1089,6 +1152,13 @@ impl<'m> Cg<'m> {
                 self.move_arg_int(st, i as Reg, *a);
             }
             let Src::I(num) = self.src(st, args[0]) else { return Err("system call numbers must be constants".into()) };
+            if num >= super::pseudo::BASE {
+                self.pseudo_syscall(num)?;
+                if let Some(d) = dst {
+                    self.commit(st, d, 0);
+                }
+                return Ok(());
+            }
             match self.target.os {
                 super::Os::Linux => {
                     self.a.mov_imm(8, num);

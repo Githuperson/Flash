@@ -63,11 +63,11 @@ Targets: Linux, macOS and Windows on x86-64, plus Linux and macOS on arm64 (Wind
   Help: Convert the number to text with `str(x)`, or use an f-string like f"value: {x}".
   ```
 - **Fast to compile.** Dev builds take ~10 ms, release builds 20–100 ms, and unchanged programs are served from a build cache.
-- **Types:** `Int`, `i8…u64`, `Float`, `Bool`, `String`, `List[T]`, `Map[K, V]`, `Set[T]`, tuples, `Result[T]` (with `?`), structs and enums (with `match`), generics like `Pair[A, B]`, methods, lambdas and function values (`Fn(Int) -> Int`), f-strings, modules, keyword arguments. Integer overflow wraps, and there are no implicit conversions.
+- **Types:** `Int`, `i8…u64`, `Float`, `Bool`, `String`, `List[T]`, `Map[K, V]`, `Set[T]`, tuples, `Result[T]` (with `?`), structs and enums (with `match`), generics like `Pair[A, B]`, methods, lambdas and function values (`Fn(Int) -> Int`), threads and channels (Linux), f-strings, modules, keyword arguments. Integer overflow wraps, and there are no implicit conversions.
 - **Batteries:** strings, math, files, paths, args, env, stdin, timing, plus `std.math` / `std.text` / `std.bench`. The runtime is written in Flash itself and talks straight to the OS.
 - **Tools:** `flash run | build | check | test | fmt`, and `flashpkg` for local packages with a hash-checked lock file.
 
-Not there yet: threads, traits, an LSP server, a package registry. See [LANGUAGE_SPEC.md §16](LANGUAGE_SPEC.md#16-not-implemented-yet).
+Not there yet: threads on macOS/Windows, traits, an LSP server, a package registry. See [LANGUAGE_SPEC.md §16](LANGUAGE_SPEC.md#16-not-implemented-yet).
 
 ## How well does it run?
 

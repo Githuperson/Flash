@@ -13,8 +13,8 @@ fn run_program(dir: &str, name: &str) {
     // dev and release with the native back end; with `--features legacy-backends` also the
     // Cranelift back end (system linker) and, when clang is installed, LLVM.
     let mut configs: Vec<(bool, Option<&str>, &[&str])> = vec![(false, None, &[]), (true, None, &[])];
-    // (Map and Set exist only in Flash's own back end.)
-    if cfg!(feature = "legacy-backends") && name != "maps" {
+    // (Map, Set, threads and channels exist only in Flash's own back end.)
+    if cfg!(feature = "legacy-backends") && !matches!(name, "maps" | "threads" | "channels") {
         configs.push((false, None, &["--linker", "system"]));
         configs.push((true, None, &["--linker", "system"]));
         if clang_available() {
@@ -55,6 +55,17 @@ macro_rules! programs {
 
 mod tests_dir {
     use super::*;
+    // Threads and channels need Linux for now (the compiler says so on the other systems).
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn threads() {
+        run_program("tests/programs", "threads");
+    }
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn channels() {
+        run_program("tests/programs", "channels");
+    }
     programs!("tests/programs": integers, const_division, methods, tuples, enums, maps, generic_types, closures, strings, scopes, results, ownership, ownership_flow, generics, modules, tree);
 }
 

@@ -94,6 +94,7 @@ impl<'a> Checker<'a> {
             // Windows: call import number `slot` of kernel32.dll (up to seven arguments).
             "__winapi" => ("__winapi", &["i", "i", "i", "i", "i", "i", "i", "i"], int.clone()),
             "__state" => ("__state", &[], int.clone()),
+            "__state0" => ("__state0", &[], int.clone()),
             // The target operating system (0 = Linux, 1 = macOS), a compile-time constant.
             "__os" => ("__os", &[], int.clone()),
             "__arch" => ("__arch", &[], int.clone()),
@@ -204,6 +205,10 @@ impl<'a> Checker<'a> {
             "copy" => {
                 self.nargs(name, args, 1, span)?;
                 let h = self.expr(args[0], None, Ctx::Borrow)?;
+                if matches!(h.ty, Type::Thread | Type::Func(..)) {
+                    let tn = self.tn(&h.ty);
+                    return self.fail(Diagnostic::error(args[0].span, format!("A {} can't be copied.", tn)));
+                }
                 let ty = h.ty.clone();
                 Ok(self.mk(B::Copy, vec![h], ty, span))
             }
@@ -356,6 +361,48 @@ impl<'a> Checker<'a> {
                 let a = self.arg_of(args[0], &s_ty, name, "The text", Ctx::Borrow)?;
                 let b = self.arg_of(args[1], &s_ty, name, "The separator", Ctx::Borrow)?;
                 Ok(self.mk(B::Split, vec![a, b], Type::List(Box::new(Type::Str)), span))
+            }
+            "join" if args.len() == 1 && matches!(self.static_type(args[0]), Some(Type::Thread)) => {
+                let t = self.expr(args[0], None, Ctx::Value)?;
+                Ok(self.mk(B::ThreadJoin, vec![t], Type::None, span))
+            }
+            "spawn" => {
+                self.nargs(name, args, 1, span)?;
+                let fty = Type::Func(vec![], Box::new(Type::None));
+                self.move_lambda = matches!(args[0].kind, crate::ast::ExprKind::Lambda { .. });
+                let f = self.expr(args[0], Some(&fty), Ctx::Value);
+                self.move_lambda = false;
+                let f = f?;
+                if f.ty != fty && f.ty != Type::Error {
+                    return self.type_mismatch(args[0].span, &fty, &f, "The function given to spawn()");
+                }
+                Ok(self.mk(B::Spawn, vec![f], Type::Thread, span))
+            }
+            "channel" => {
+                self.nargs(name, args, 0, span)?;
+                match expected {
+                    Some(t @ Type::Chan(_)) => Ok(self.mk(B::ChanNew, vec![], t.clone(), span)),
+                    _ => self.fail(
+                        Diagnostic::error(span, "I can't tell what this channel carries.")
+                            .help("Give the variable a type: `ch: Channel[Int] = channel()`."),
+                    ),
+                }
+            }
+            "send" | "recv" | "close" => {
+                self.nargs(name, args, if name == "send" { 2 } else { 1 }, span)?;
+                let ch = self.expr(args[0], None, Ctx::Borrow)?;
+                let Type::Chan(t) = ch.ty.clone() else {
+                    let tn = self.tn(&ch.ty);
+                    return self.fail(Diagnostic::error(args[0].span, format!("{}() needs a Channel, but this is {}.", name, tn)));
+                };
+                match name {
+                    "send" => {
+                        let v = self.arg_of(args[1], &t, name, "The message", Ctx::Value)?;
+                        Ok(self.mk(B::ChanSend, vec![ch, v], Type::None, span))
+                    }
+                    "recv" => Ok(self.mk(B::ChanRecv, vec![ch], Type::Result(t), span)),
+                    _ => Ok(self.mk(B::ChanClose, vec![ch], Type::None, span)),
+                }
             }
             "join" => {
                 self.nargs(name, args, 2, span)?;

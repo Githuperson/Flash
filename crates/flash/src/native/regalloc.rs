@@ -83,7 +83,7 @@ pub fn is_noreturn_call(f: &Function, b: &Block) -> bool {
 
 pub fn for_uses(i: &Inst, mut f: impl FnMut(VReg)) {
     match i {
-        Inst::IConst { .. } | Inst::FConst { .. } | Inst::DataAddr { .. } | Inst::StackAddr { .. } => {}
+        Inst::IConst { .. } | Inst::FConst { .. } | Inst::DataAddr { .. } | Inst::ThreadPtr { .. } | Inst::StackAddr { .. } => {}
         Inst::Copy { src, .. } | Inst::Cast { src, .. } => f(*src),
         Inst::Un { a, .. } => f(*a),
         Inst::Bin { a, b, .. } | Inst::Cmp { a, b, .. } => {
@@ -132,6 +132,7 @@ pub fn def_of(i: &Inst) -> Option<VReg> {
         | Inst::Load { dst, .. }
         | Inst::LoadIdx { dst, .. }
         | Inst::DataAddr { dst, .. }
+        | Inst::ThreadPtr { dst }
         | Inst::StackAddr { dst, .. }
         | Inst::Select { dst, .. } => Some(*dst),
         Inst::Call { dst, .. } => *dst,

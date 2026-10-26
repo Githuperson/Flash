@@ -1,0 +1,5 @@
+fn run(name: String):
+    t = spawn(lambda: say(name))
+    t.join()
+
+run("x")

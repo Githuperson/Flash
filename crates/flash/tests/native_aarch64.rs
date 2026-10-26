@@ -141,3 +141,18 @@ fn language_features_run_on_aarch64() {
         }
     }
 }
+
+#[test]
+fn channels_and_atomics_run_on_aarch64_linux() {
+    if !emulator_available() {
+        eprintln!("skipped: python3 with unicorn is not available");
+        return;
+    }
+    // (Threads themselves cannot be emulated; this covers the thread pointer and the atomic
+    // sequences through channels used from one thread. The threads test runs on real hardware in CI.)
+    let src = repo_root().join("tests/programs/channels.flash");
+    let expected = std::fs::read_to_string(src.with_extension("expected")).unwrap();
+    for release in [false, true] {
+        assert_eq!(emulate_for(&src, release, "aarch64-unknown-linux-gnu", &format!("a64-chan-{}", release)), expected);
+    }
+}

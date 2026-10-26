@@ -502,8 +502,27 @@ Not covered:
 
 ### Data races and concurrency
 
-v0.1 has **no threads, no async and no shared mutable state** in the language, so safe Flash code cannot have data races. A concurrency design
-(`Send`-style ownership transfer between threads; shared state only through channels) is planned but is not implemented, and no concurrency claims are made.
+Flash has threads and channels (Linux only for now; other systems report this at compile time). Threads **share nothing**: whatever a thread uses is
+copied or moved into it, and values travel between threads through channels, so safe Flash code cannot have a data race.
+
+```
+results: Channel[Int] = channel()
+tx = copy(results)                          # another handle to the same channel
+t = spawn(lambda: send(tx, 6 * 7))          # runs on a new thread
+t.join()                                    # wait for it
+say(unwrap(recv(results)))                  # 42
+```
+
+* `spawn(f)` runs a function value of type `Fn()` on a new thread and returns a `Thread`; `t.join()` (or `join(t)`) waits for it and consumes the handle.
+  A `lambda` written directly in `spawn(...)` **takes ownership** of the strings, lists, structs and channels it uses (they are moved in, so the code
+  after `spawn` can no longer use them) and copies numbers and `Bool`. A borrowed parameter can't be moved into a thread: pass `copy(x)` or take it with `own`.
+* `channel()` needs a type: `ch: Channel[T] = channel()`. `send(ch, v)` moves `v` into the channel; `recv(ch)` waits for a message and returns a `Result[T]`
+  that is an error once the channel is closed and empty; `close(ch)` ends it. `for x in ch:` receives until then. `copy(ch)` makes another handle to the same channel
+  (a channel is freed with its last handle, together with any messages nobody received).
+* A thread that is never joined is simply left running until the program exits. Output written by threads is flushed a line at a time.
+* A runtime error in any thread (an out-of-range index, a failed `assert`, ...) ends the whole program with exit code 101.
+* Implementation: every thread has its own runtime state (so the allocator needs no locks); channels use atomic operations and futexes. On x86-64 and AArch64 Linux the code
+  generators emit the `clone` call, the atomics and the thread-pointer access themselves; no C library is involved.
 
 ### `unsafe`
 
@@ -699,7 +718,7 @@ These are part of the design direction but **do not exist** in v0.1; the compile
 * traits/interfaces, generic *functions* with explicit type parameters (plain functions are already generic by inference), operator overloading, closures that capture strings, lists or structs;
 * string indexing and slicing syntax, character type, string formatting specs (`{x:.2f}`);
 * global variables and constants; `while … else`; `del`; `with`;
-* threads, async, channels (so no data-race story beyond "there is no concurrency");
+* async/await, locks and shared mutable state between threads; threads and channels on macOS and Windows (they work on Linux only);
 * `unsafe` blocks and raw pointers;
 * reference locals (`b = bodies[i]` is rejected because it would move an element out; index each time or use `for`);
 * statically linking of anything other than C-ABI `extern fn` functions (no automatic bindings, no strings/structs across `extern fn`);

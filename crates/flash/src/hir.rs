@@ -107,6 +107,14 @@ pub enum Builtin {
     PathParent,
     PathExt,
     SleepMs,
+    /// `spawn(f)`: run a function value on a new thread.
+    Spawn,
+    /// `join(thread)`: wait for the thread.
+    ThreadJoin,
+    ChanNew,
+    ChanSend,
+    ChanRecv,
+    ChanClose,
     Ok,
     Fail,
     IsOk,

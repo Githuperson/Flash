@@ -157,9 +157,44 @@ impl<'a, 'p> FnLower<'a, 'p> {
         self.print_lit(")");
     }
 
+    /// A value as the 64-bit word a channel stores (the low bytes hold the value).
+    fn to_word(&mut self, v: VReg, ty: &Type) -> VReg {
+        match ir_ty(ty) {
+            Ty::I64 => v,
+            Ty::F64 => self.cast(CastOp::FBitsToI, v, Ty::I64),
+            _ => self.cast(CastOp::ZExt, v, Ty::I64),
+        }
+    }
+
     pub(super) fn builtin(&mut self, b: &Builtin, args: &[HExpr], e: &HExpr) -> VReg {
         use Builtin as B;
         match b {
+            B::Spawn => {
+                let f = self.expr(&args[0]);
+                self.rtv("fl_thread_spawn", &[f])
+            }
+            B::ThreadJoin => {
+                let t = self.expr(&args[0]);
+                self.rt("fl_thread_join", &[t]);
+                self.dummy()
+            }
+            B::ChanNew => self.rtv("fl_chan_new", &[]),
+            B::ChanSend => {
+                let c = self.borrow(&args[0]);
+                let v = self.expr(&args[1]);
+                let w = self.to_word(v, &args[1].ty);
+                self.rt("fl_chan_send", &[c, w]);
+                self.dummy()
+            }
+            B::ChanRecv => {
+                let c = self.borrow(&args[0]);
+                self.rtv("fl_chan_recv", &[c])
+            }
+            B::ChanClose => {
+                let c = self.borrow(&args[0]);
+                self.rt("fl_chan_close", &[c]);
+                self.dummy()
+            }
             B::Say | B::Print => {
                 for (i, a) in args.iter().enumerate() {
                     if i > 0 {
@@ -578,7 +613,13 @@ impl<'a, 'p> FnLower<'a, 'p> {
             }
             "__os" => self.iconst(Ty::I64, self.lw.target_os & 3),
             "__arch" => self.iconst(Ty::I64, self.lw.target_os >> 2),
-            "__state" => {
+            "__state" if self.lw.target_os & 3 == 0 => {
+                // Linux: every thread has its own state block, found through the thread pointer
+                let d = self.vreg(Ty::I64);
+                self.emit(Inst::ThreadPtr { dst: d });
+                d
+            }
+            "__state" | "__state0" => {
                 let id = self.lw.state_data();
                 let d = self.vreg(Ty::I64);
                 self.emit(Inst::DataAddr { dst: d, data: id });

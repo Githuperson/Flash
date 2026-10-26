@@ -167,6 +167,7 @@ fn def_of(i: &Inst) -> Option<VReg> {
         | Inst::Load { dst, .. }
         | Inst::LoadIdx { dst, .. }
         | Inst::DataAddr { dst, .. }
+        | Inst::ThreadPtr { dst }
         | Inst::StackAddr { dst, .. }
         | Inst::Select { dst, .. } => Some(*dst),
         Inst::Call { dst, .. } => *dst,
@@ -345,6 +346,9 @@ fn process_block(f: &mut Function, vregs: &[Ty], st: &mut State, b: usize) -> bo
             }
             Inst::DataAddr { dst, data } => {
                 numbered_const(st, Key::Data(*data), *dst);
+            }
+            Inst::ThreadPtr { dst } => {
+                numbered_const(st, Key::Data(u32::MAX), *dst);
             }
             Inst::StackAddr { dst, slot } => {
                 numbered_const(st, Key::Stack(*slot), *dst);
