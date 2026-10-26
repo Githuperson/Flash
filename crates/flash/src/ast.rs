@@ -60,6 +60,8 @@ pub struct Param {
 
 #[derive(Clone, Debug)]
 pub struct FnDef {
+    /// For a method `fn Player.level_up(...)` the name is `Player.level_up` and `owner` is `Player`.
+    pub owner: Option<String>,
     pub name: String,
     pub name_span: Span,
     pub params: Vec<Param>,

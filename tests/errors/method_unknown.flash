@@ -1,0 +1,8 @@
+struct P:
+    x: Int
+
+fn P.get(self) -> Int:
+    return self.x
+
+p = P(x=1)
+say(p.missing())

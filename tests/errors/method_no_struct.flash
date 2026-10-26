@@ -1,0 +1,2 @@
+fn Ghost.boo(self):
+    pass

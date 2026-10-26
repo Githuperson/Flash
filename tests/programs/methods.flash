@@ -1,0 +1,44 @@
+# Methods: `fn Type.name(self, ...)`, called as value.name(...) or Type.name(...)
+struct Player:
+    name: String
+    score: Int
+
+struct Counter:
+    n: Int
+
+fn Player.new(own name: String) -> Player:
+    return Player(name=name, score=0)
+
+fn Player.level_up(mut self, amount: Int):
+    self.score = self.score + amount
+
+fn Player.describe(self) -> String:
+    return f"{self.name} has {self.score} points"
+
+fn Player.is_winner(self) -> Bool:
+    return self.score >= 100
+
+fn Counter.tick(mut self):
+    self.n += 1
+
+fn Counter.value(self) -> Int:
+    return self.n
+
+p = Player.new("Alex")
+p.level_up(60)
+p.level_up(amount=50)
+say(p.describe())
+say(p.is_winner())
+
+c = Counter(n=0)
+for i in 0..5:
+    c.tick()
+say(c.value())
+
+team: List[Player] = []
+append(team, Player.new("Bo"))
+append(team, p)
+team[0].level_up(7)
+for member in team:
+    say(member.describe())
+say(Player.describe(team[1]))

@@ -167,6 +167,14 @@ impl<'a> Checker<'a> {
         for (mi, m) in self.mods.iter().enumerate() {
             for it in &m.ast.items {
                 if let Item::Fn(f) = it {
+                    if let Some(o) = &f.owner {
+                        if !self.struct_ids.contains_key(o) {
+                            self.error(
+                                Diagnostic::error(f.name_span, format!("There is no struct called '{}' to attach the method '{}' to.", o, f.name))
+                                    .help(format!("Define the struct first (`struct {}:` with its fields), or write a plain function instead.", o)),
+                            );
+                        }
+                    }
                     self.fn_index.insert((mi, f.name.clone()), self.fns.len());
                     self.fns.push(FnItem { def: Rc::new(f.clone()), module: mi });
                 }
@@ -1072,6 +1080,35 @@ impl<'a> Checker<'a> {
                         }
                     }
                 }
+                // Static method call: Player.new(args)
+                if let ExprKind::Name(tn) = &base.kind {
+                    if self.lookup(tn).is_none() && self.struct_ids.contains_key(tn) {
+                        let Some(fidx) = self.find_method(tn, name) else {
+                            return self.fail(Diagnostic::error(callee.span, format!("The struct {} has no method '{}'.", tn, name)).help(format!(
+                                "Define it with `fn {}.{}(...):`.",
+                                tn, name
+                            )));
+                        };
+                        let list: Vec<(Option<&str>, &Expr)> = args.iter().map(|a| (a.name.as_deref(), &a.value)).collect();
+                        return self.call_user(fidx, &list, span);
+                    }
+                }
+                // Method call on a value: p.level_up(args) == Player.level_up(p, args)
+                let owner: Option<String> = match self.static_type(base) {
+                    Some(Type::Struct(sid)) => Some(self.structs[sid].name.clone()),
+                    _ => None,
+                };
+                let cur_module = self.cx().module;
+                let method = match &owner {
+                    Some(o) => self.find_method(o, name),
+                    None if !is_builtin(name) && !self.fn_index.contains_key(&(cur_module, name.clone())) => self.unique_method_named(name),
+                    None => None,
+                };
+                if let Some(fidx) = method {
+                    let mut list: Vec<(Option<&str>, &Expr)> = vec![(None, &**base)];
+                    list.extend(args.iter().map(|a| (a.name.as_deref(), &a.value)));
+                    return self.call_user(fidx, &list, span);
+                }
                 // Method-call syntax: receiver.f(args) == f(receiver, args)
                 let module = self.cx().module;
                 let mut list: Vec<(Option<&str>, &Expr)> = vec![(None, &**base)];
@@ -1086,6 +1123,56 @@ impl<'a> Checker<'a> {
                 Err(())
             }
             _ => Err(()),
+        }
+    }
+
+    /// The type of a simple expression (variable, field, element) without checking it, or None.
+    fn static_type(&mut self, e: &Expr) -> Option<Type> {
+        match &e.kind {
+            ExprKind::Name(n) => {
+                let id = self.lookup(n)?;
+                Some(self.cx().locals[id].ty.clone())
+            }
+            ExprKind::Field { base, name, .. } => match self.static_type(base)? {
+                Type::Struct(sid) => self.structs[sid].fields.iter().find(|(f, _)| f == name).map(|(_, t)| t.clone()),
+                _ => None,
+            },
+            ExprKind::Index { base, .. } => match self.static_type(base)? {
+                Type::List(el) => Some(*el),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    /// The function index of method `name` of struct `owner`, defined in this module or any other.
+    fn find_method(&mut self, owner: &str, name: &str) -> Option<usize> {
+        let key = format!("{}.{}", owner, name);
+        let module = self.cx().module;
+        if let Some(&f) = self.fn_index.get(&(module, key.clone())) {
+            return Some(f);
+        }
+        let mut found: Vec<usize> = self.fn_index.iter().filter(|((_, k), _)| *k == key).map(|(_, f)| *f).collect();
+        found.sort();
+        found.first().copied()
+    }
+
+    /// When the receiver's type is not known without checking it: the method called `name` if
+    /// exactly one struct has one.
+    fn unique_method_named(&mut self, name: &str) -> Option<usize> {
+        let suffix = format!(".{}", name);
+        let mut found: Vec<usize> = self
+            .fns
+            .iter()
+            .enumerate()
+            .filter(|(_, f)| f.def.owner.is_some() && f.def.name.ends_with(&suffix))
+            .map(|(i, _)| i)
+            .collect();
+        found.dedup();
+        if found.len() == 1 {
+            Some(found[0])
+        } else {
+            None
         }
     }
 

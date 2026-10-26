@@ -231,7 +231,16 @@ impl<'a> Parser<'a> {
 
     fn fn_def(&mut self) -> PResult<FnDef> {
         let start = self.bump().span;
-        let (name, name_span) = self.ident("a function name after `fn`")?;
+        let (mut name, mut name_span) = self.ident("a function name after `fn`")?;
+        // `fn Player.level_up(...)` defines a method of the struct Player.
+        let mut owner = None;
+        if self.at(&Tok::Dot) {
+            self.bump();
+            let (method, msp) = self.ident("a method name after '.'")?;
+            owner = Some(name.clone());
+            name = format!("{}.{}", name, method);
+            name_span = name_span.to(msp);
+        }
         self.expect(Tok::LParen, "'(' after the function name")?;
         let mut params = vec![];
         while !self.at(&Tok::RParen) {
@@ -244,7 +253,12 @@ impl<'a> Parser<'a> {
                 ParamMode::Borrow
             };
             let (pname, _) = self.ident("a parameter name")?;
-            let ty = if self.eat(&Tok::Colon) { Some(self.type_expr()?) } else { None };
+            let mut ty = if self.eat(&Tok::Colon) { Some(self.type_expr()?) } else { None };
+            if ty.is_none() && pname == "self" && params.is_empty() {
+                if let Some(o) = &owner {
+                    ty = Some(TypeExpr { name: o.clone(), args: vec![], span: psp });
+                }
+            }
             params.push(Param { name: pname, ty, mode, span: psp.to(self.prev_span()) });
             if !self.eat(&Tok::Comma) {
                 break;
@@ -254,7 +268,7 @@ impl<'a> Parser<'a> {
         let ret = if self.eat(&Tok::Arrow) { Some(self.type_expr()?) } else { None };
         let header = start.to(self.prev_span());
         let body = self.block("':' after the function header")?;
-        Ok(FnDef { name, name_span, params, ret, body, span: header })
+        Ok(FnDef { owner, name, name_span, params, ret, body, span: header })
     }
 
     /// `extern fn name(a: Int, b: String) -> Int`

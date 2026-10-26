@@ -21,13 +21,15 @@ struct Resolver<'a> {
     /// per module: function names
     fns: Vec<HashSet<String>>,
     structs: HashMap<String, Span>,
+    /// every method as `Owner.name` (methods are attached to structs, which are global)
+    methods: HashSet<String>,
     cur: usize,
     scopes: Vec<HashSet<String>>,
     loop_depth: usize,
 }
 
 pub fn resolve(mods: &[LoadedModule], plugins: &[PluginBinding], diags: &mut Diagnostics) {
-    let mut r = Resolver { mods, plugins, diags, fns: vec![], structs: HashMap::new(), cur: 0, scopes: vec![], loop_depth: 0 };
+    let mut r = Resolver { mods, plugins, diags, fns: vec![], structs: HashMap::new(), methods: HashSet::new(), cur: 0, scopes: vec![], loop_depth: 0 };
     r.run();
 }
 
@@ -44,6 +46,9 @@ impl<'a> Resolver<'a> {
             for it in &m.ast.items {
                 match it {
                     Item::Fn(f) => {
+                        if f.owner.is_some() {
+                            self.methods.insert(f.name.clone());
+                        }
                         if let Some(prev) = names.get(&f.name) {
                             self.diags.push(
                                 Diagnostic::error(f.name_span, format!("The function '{}' is defined twice.", f.name))
@@ -299,6 +304,11 @@ impl<'a> Resolver<'a> {
         self.mods[self.cur].plugins.iter().find(|(a, _)| a == alias).map(|(_, i)| *i)
     }
 
+    fn is_method_name(&self, name: &str) -> bool {
+        let suffix = format!(".{}", name);
+        self.methods.iter().any(|m| m.ends_with(&suffix))
+    }
+
     fn expr(&mut self, e: &Expr) {
         match &e.kind {
             ExprKind::Int(_) | ExprKind::Float(_) | ExprKind::Str(_) | ExprKind::Bool(_) | ExprKind::None => {}
@@ -343,8 +353,16 @@ impl<'a> Resolver<'a> {
                         if let ExprKind::Name(m) = &base.kind {
                             if self.declared(m) {
                                 // method-call syntax on a variable
-                                if !(self.fns[self.cur].contains(name) || is_builtin(name)) {
+                                if !(self.fns[self.cur].contains(name) || is_builtin(name) || self.is_method_name(name)) {
                                     self.unknown_name(name, *name_span, true);
+                                }
+                            } else if self.structs.contains_key(m) {
+                                // static method: Player.new(...)
+                                if !self.methods.contains(&format!("{}.{}", m, name)) {
+                                    self.diags.push(
+                                        Diagnostic::error(*name_span, format!("The struct {} has no method '{}'.", m, name))
+                                            .help(format!("Define it with `fn {}.{}(...):`.", m, name)),
+                                    );
                                 }
                             } else if let Some(mi) = self.module_for_alias(m) {
                                 if !self.fns[mi].contains(name) {
@@ -370,7 +388,7 @@ impl<'a> Resolver<'a> {
                             }
                         } else {
                             self.expr(base);
-                            if !(self.fns[self.cur].contains(name) || is_builtin(name)) {
+                            if !(self.fns[self.cur].contains(name) || is_builtin(name) || self.is_method_name(name)) {
                                 self.unknown_name(name, *name_span, true);
                             }
                         }
