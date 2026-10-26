@@ -135,6 +135,11 @@ pub enum StmtKind {
         iter: ForIter,
         body: Vec<Stmt>,
     },
+    /// `a, b = value` — assign the elements of a tuple to several places.
+    Unpack {
+        targets: Vec<Expr>,
+        value: Expr,
+    },
     Break,
     Continue,
     Return(Option<Expr>),
@@ -247,4 +252,6 @@ pub enum ExprKind {
     List(Vec<Expr>),
     /// `expr?` — propagate an error.
     Try(Box<Expr>),
+    /// `(a, b)` — a tuple with at least two elements (or one with a trailing comma).
+    Tuple(Vec<Expr>),
 }

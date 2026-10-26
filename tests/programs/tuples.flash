@@ -1,0 +1,55 @@
+# Tuples: (a, b) values, t.0 / t.1, unpacking, returning several values
+fn min_max(xs: List[Int]) -> (Int, Int):
+    lo = xs[0]
+    hi = xs[0]
+    for x in xs:
+        if x < lo:
+            lo = x
+        if x > hi:
+            hi = x
+    return lo, hi
+
+fn describe(name: String, age: Int) -> (String, Int):
+    return (f"{name} is {age}", age * 2)
+
+fn swap(a: Int, b: Int) -> (Int, Int):
+    return b, a
+
+pair = (1, "one")
+say(pair)
+say(pair.0, pair.1)
+
+nums = [5, 3, 9, 1, 7]
+lo, hi = min_max(nums)
+say(lo, hi)
+
+text, doubled = describe("Ana", 21)
+say(text, doubled)
+
+x = 10
+y = 20
+x, y = y, x
+say(x, y)
+a, b = swap(1, 2)
+say(a, b)
+
+nested = ((1, 2), "pair")
+say(nested)
+say((nested.0).1)
+
+points: List[(Int, Int)] = []
+for i in 0..3:
+    append(points, (i, i * i))
+say(points)
+say(points[2].1)
+
+one = (42,)
+say(one)
+
+struct Box:
+    size: (Int, Int)
+    label: String
+
+bx = Box(size=(3, 4), label="b")
+w, h = copy(bx.size)
+say(w * h, bx.label)

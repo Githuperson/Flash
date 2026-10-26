@@ -142,7 +142,7 @@ impl<'a> Checker<'a> {
                 if let Item::Struct(s) = it {
                     if !self.struct_ids.contains_key(&s.name) {
                         self.struct_ids.insert(s.name.clone(), self.structs.len());
-                        self.structs.push(StructInfo { name: s.name.clone(), fields: vec![], span: s.name_span, offsets: vec![], size: 8 });
+                        self.structs.push(StructInfo { name: s.name.clone(), fields: vec![], span: s.name_span, offsets: vec![], size: 8, tuple: false });
                     }
                 }
             }
@@ -311,6 +311,16 @@ impl<'a> Checker<'a> {
                 let inner = self.resolve_type(&t.args[0])?;
                 Ok(if t.name == "List" { Type::List(Box::new(inner)) } else { Type::Result(Box::new(inner)) })
             }
+            "Tuple" => {
+                let mut elems = vec![];
+                for a in &t.args {
+                    elems.push(self.resolve_type(a)?);
+                }
+                if elems.is_empty() {
+                    return self.fail(Diagnostic::error(t.span, "A tuple type needs at least one element type.").help("For example: (Int, String)"));
+                }
+                Ok(Type::Struct(self.tuple_type(elems)))
+            }
             n => {
                 if let Some(id) = self.struct_ids.get(n) {
                     return self.no_args(t, Type::Struct(*id));
@@ -318,6 +328,117 @@ impl<'a> Checker<'a> {
                 self.fail(Diagnostic::error(t.span, format!("I don't know a type called '{}'.", n)))
             }
         }
+    }
+
+    fn mk_copy(&self, e: HExpr, span: Span) -> HExpr {
+        let ty = e.ty.clone();
+        he(HKind::Builtin(Builtin::Copy, vec![e]), ty, span)
+    }
+
+    /// The (anonymous) struct that represents the tuple type with these element types.
+    pub fn tuple_type(&mut self, elems: Vec<Type>) -> StructId {
+        let inner: Vec<String> = elems.iter().map(|t| self.tn(t)).collect();
+        let name = if inner.len() == 1 { format!("({},)", inner[0]) } else { format!("({})", inner.join(", ")) };
+        if let Some(&id) = self.struct_ids.get(&name) {
+            return id;
+        }
+        let fields: Vec<(String, Type)> = elems.into_iter().enumerate().map(|(i, t)| (i.to_string(), t)).collect();
+        let mut info = StructInfo { name: name.clone(), fields, span: Span::default(), offsets: vec![], size: 8, tuple: true };
+        info.compute_layout();
+        let id = self.structs.len();
+        self.structs.push(info);
+        self.struct_ids.insert(name, id);
+        id
+    }
+
+    fn tuple_lit(&mut self, elems: &[Expr], expected: Option<&Type>, span: Span) -> R<HExpr> {
+        let hint: Option<Vec<Type>> = match expected {
+            Some(Type::Struct(sid)) if self.structs[*sid].tuple && self.structs[*sid].fields.len() == elems.len() => {
+                Some(self.structs[*sid].fields.iter().map(|(_, t)| t.clone()).collect())
+            }
+            _ => None,
+        };
+        let mut hs = vec![];
+        let mut failed = false;
+        for (i, e) in elems.iter().enumerate() {
+            let h = self.expr(e, hint.as_ref().map(|h| &h[i]), Ctx::Value);
+            match h {
+                Ok(h) => hs.push(h),
+                Err(_) => failed = true,
+            }
+        }
+        if failed {
+            return Err(());
+        }
+        let tys: Vec<Type> = hs.iter().map(|h| h.ty.clone()).collect();
+        let sid = self.tuple_type(tys);
+        Ok(he(HKind::Struct(hs), Type::Struct(sid), span))
+    }
+
+    /// `a, b = value`: evaluate the tuple once, then copy each element into its target.
+    fn unpack(&mut self, targets: &[Expr], value: &Expr, span: Span, out: &mut Vec<HStmt>) -> R<()> {
+        let v = self.expr(value, None, Ctx::Value)?;
+        let sid = match &v.ty {
+            Type::Struct(sid) if self.structs[*sid].tuple => *sid,
+            Type::Error => return Err(()),
+            other => {
+                let tn = self.tn(other);
+                return self.fail(
+                    Diagnostic::error(value.span, format!("Only a tuple can be unpacked into several names, but this is {}.", tn))
+                        .help("Return several values with `return a, b`, then write `x, y = f()`."),
+                );
+            }
+        };
+        let fields = self.structs[sid].fields.clone();
+        if fields.len() != targets.len() {
+            let tn = self.tn(&v.ty);
+            return self.fail(Diagnostic::error(
+                span,
+                format!("This is a tuple of {} values ({}), but {} names are being assigned.", fields.len(), tn, targets.len()),
+            ));
+        }
+        let tmp = self.add_local("<tuple>", v.ty.clone(), LocalKind::Var, span);
+        out.push(HStmt { kind: HStmtKind::Let(tmp, v), span });
+        for (i, target) in targets.iter().enumerate() {
+            let fty = fields[i].1.clone();
+            let base = he(HKind::Local(tmp, UseMode::Borrow), Type::Struct(sid), span);
+            let field = he(HKind::Field(Box::new(base), i), fty.clone(), span);
+            let elem = if fty.is_copy() { field } else { self.mk_copy(field, span) };
+            match &target.kind {
+                ExprKind::Name(name) => {
+                    if let Some(id) = self.lookup(name) {
+                        let (lty, lkind) = {
+                            let l = &self.cx().locals[id];
+                            (l.ty.clone(), l.kind)
+                        };
+                        if lty != fty {
+                            let (a, b) = (self.tn(&lty), self.tn(&fty));
+                            return self.fail(Diagnostic::error(target.span, format!("'{}' is {}, but this element is {}.", name, a, b)));
+                        }
+                        if lkind != LocalKind::Var {
+                            return self.fail(Diagnostic::error(target.span, format!("Cannot assign to '{}' here (it is a parameter or loop variable).", name)));
+                        }
+                        let place = he(HKind::Local(id, UseMode::Borrow), lty, target.span);
+                        out.push(HStmt { kind: HStmtKind::Assign(place, elem), span });
+                    } else {
+                        let id = self.add_local(name, fty, LocalKind::Var, target.span);
+                        out.push(HStmt { kind: HStmtKind::Let(id, elem), span });
+                    }
+                }
+                ExprKind::Field { .. } | ExprKind::Index { .. } => {
+                    let place = self.expr(target, None, Ctx::Borrow)?;
+                    self.check_mut_place(&place, target.span, "assign to")?;
+                    if place.ty != fty {
+                        return self.type_mismatch(target.span, &place.ty.clone(), &elem, "this place");
+                    }
+                    out.push(HStmt { kind: HStmtKind::Assign(place, elem), span });
+                }
+                _ => {
+                    return self.fail(Diagnostic::error(target.span, "You can only unpack into variables, fields (`a.b`) or list elements (`a[i]`)."));
+                }
+            }
+        }
+        Ok(())
     }
 
     fn no_args(&mut self, t: &TypeExpr, ty: Type) -> R<Type> {
@@ -456,6 +577,7 @@ impl<'a> Checker<'a> {
                 out.push(HStmt { kind: HStmtKind::Expr(h), span });
             }
             StmtKind::Assign { target, ty, value } => self.assign(target, ty.as_ref(), value, span, out)?,
+            StmtKind::Unpack { targets, value } => self.unpack(targets, value, span, out)?,
             StmtKind::AugAssign { target, op, value } => {
                 let bin = Expr {
                     kind: ExprKind::Binary(*op, Box::new(target.clone()), Box::new(value.clone())),
@@ -853,6 +975,7 @@ impl<'a> Checker<'a> {
                 Ok(he(HKind::Index(Box::new(hb), Box::new(hi)), elem, span))
             }
             ExprKind::Try(inner) => self.try_expr(inner, span),
+            ExprKind::Tuple(elems) => self.tuple_lit(elems, expected, span),
             ExprKind::Call { callee, args } => self.call(callee, args, span, expected, ctx),
         }
     }

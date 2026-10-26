@@ -177,7 +177,7 @@ impl<'a> Resolver<'a> {
     fn type_expr(&mut self, t: &TypeExpr) {
         use crate::types::IntTy;
         let known = IntTy::from_name(&t.name).is_some()
-            || matches!(t.name.as_str(), "Float" | "f64" | "Bool" | "String" | "None" | "List" | "Result")
+            || matches!(t.name.as_str(), "Float" | "f64" | "Bool" | "String" | "None" | "List" | "Result" | "Tuple")
             || self.structs.contains_key(&t.name);
         if !known {
             let cands: Vec<&str> = ["Int", "Float", "Bool", "String", "None", "List", "Result", "i32", "u8"]
@@ -224,6 +224,19 @@ impl<'a> Resolver<'a> {
                         }
                     }
                     _ => self.expr(target),
+                }
+            }
+            StmtKind::Unpack { targets, value } => {
+                self.expr(value);
+                for t in targets {
+                    match &t.kind {
+                        ExprKind::Name(n) => {
+                            if !self.declared(n) {
+                                self.scopes.last_mut().unwrap().insert(n.clone());
+                            }
+                        }
+                        _ => self.expr(t),
+                    }
                 }
             }
             StmtKind::AugAssign { target, value, .. } => {
@@ -403,7 +416,7 @@ impl<'a> Resolver<'a> {
                 self.expr(base);
                 self.expr(index);
             }
-            ExprKind::List(es) => {
+            ExprKind::List(es) | ExprKind::Tuple(es) => {
                 for x in es {
                     self.expr(x);
                 }

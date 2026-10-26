@@ -23,6 +23,7 @@ impl<'a, 'p> FnLower<'a, 'p> {
                 self.rt("fl_print_none", &[]);
             }
             Type::List(et) => self.print_list(v, et),
+            Type::Struct(sid) => self.print_tuple(v, *sid),
             t => unreachable!("print {:?}", t),
         }
     }
@@ -32,7 +33,6 @@ impl<'a, 'p> FnLower<'a, 'p> {
         let open = self.lw.string_data("[");
         let close = self.lw.string_data("]");
         let sep = self.lw.string_data(", ");
-        let quote = self.lw.string_data("\"");
         let lit = |s: &mut Self, d: DataId| {
             let p = s.vreg(Ty::I64);
             s.emit(Inst::DataAddr { dst: p, data: d });
@@ -63,6 +63,24 @@ impl<'a, 'p> FnLower<'a, 'p> {
         let off = self.bin(BinOp::Mul, idx, stride);
         let addr = self.bin(BinOp::Add, data, off);
         let ev = self.load(ir_ty(et), addr, 0);
+        self.print_elem(ev, et);
+        let one = self.iconst(Ty::I64, 1);
+        let next = self.bin(BinOp::Add, idx, one);
+        self.copy(idx, next);
+        self.jump_to(head);
+        self.switch(exit);
+        lit(self, close);
+    }
+
+    fn print_lit(&mut self, text: &str) {
+        let d = self.lw.string_data(text);
+        let p = self.vreg(Ty::I64);
+        self.emit(Inst::DataAddr { dst: p, data: d });
+        self.rt("fl_print_str", &[p]);
+    }
+
+    /// Print one element of a list or tuple (strings are quoted).
+    fn print_elem(&mut self, ev: VReg, et: &Type) {
         match et {
             Type::Int(it) => {
                 let w = self.widen(ev, *it);
@@ -75,21 +93,33 @@ impl<'a, 'p> FnLower<'a, 'p> {
                 self.rt("fl_print_bool", &[ev]);
             }
             Type::Str => {
-                lit(self, quote);
+                self.print_lit("\"");
                 self.rt("fl_print_str", &[ev]);
-                lit(self, quote);
+                self.print_lit("\"");
             }
             Type::List(inner) => self.print_list(ev, inner),
+            Type::Struct(sid) => self.print_tuple(ev, *sid),
             _ => {
                 self.rt("fl_print_none", &[]);
             }
         }
-        let one = self.iconst(Ty::I64, 1);
-        let next = self.bin(BinOp::Add, idx, one);
-        self.copy(idx, next);
-        self.jump_to(head);
-        self.switch(exit);
-        lit(self, close);
+    }
+
+    /// Print `(a, b)` for a tuple (a pointer to its fields).
+    fn print_tuple(&mut self, p: VReg, sid: usize) {
+        let si = self.lw.structs()[sid].clone();
+        self.print_lit("(");
+        for (i, (_, ft)) in si.fields.iter().enumerate() {
+            if i > 0 {
+                self.print_lit(", ");
+            }
+            let fv = self.load(ir_ty(ft), p, si.offsets[i] as i32);
+            self.print_elem(fv, ft);
+        }
+        if si.fields.len() == 1 {
+            self.print_lit(",");
+        }
+        self.print_lit(")");
     }
 
     pub(super) fn builtin(&mut self, b: &Builtin, args: &[HExpr], e: &HExpr) -> VReg {

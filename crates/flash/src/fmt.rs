@@ -218,6 +218,9 @@ fn render_line(src: &str, toks: &[Token]) -> String {
                 false
             } else if matches!(prev, Tok::Dot | Tok::LParen | Tok::LBracket | Tok::Tilde | Tok::DotDot | Tok::DotDotEq) || prev_unary {
                 false
+            } else if nest > 0 && (matches!(cur, Tok::Assign) || matches!(prev, Tok::Assign)) {
+                // keyword argument: name=value (also when the value starts with a bracket)
+                false
             } else if matches!(cur, Tok::LParen) {
                 // call / grouping: no space after a name or closing bracket
                 !(is_operand_end(prev) && !matches!(prev, Tok::Str(_) | Tok::FStr(_)) || matches!(prev, Tok::Fn))

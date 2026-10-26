@@ -37,15 +37,16 @@ impl<'a> Checker<'a> {
     }
 
     fn printable(&mut self, name: &str, h: &HExpr, span: Span) -> R<()> {
-        fn ok(t: &Type) -> bool {
+        fn ok(t: &Type, structs: &[crate::types::StructInfo]) -> bool {
             match t {
                 Type::Int(_) | Type::Float | Type::Bool | Type::Str | Type::None => true,
-                Type::List(e) => ok(e),
+                Type::List(e) => ok(e, structs),
+                Type::Struct(sid) => structs[*sid].tuple && structs[*sid].fields.iter().all(|(_, f)| ok(f, structs)),
                 _ => false,
             }
         }
         match &h.ty {
-            t if ok(t) && (name != "str" || !matches!(t, Type::List(_))) => Ok(()),
+            t if ok(t, &self.structs) && (name != "str" || !matches!(t, Type::List(_) | Type::Struct(_))) => Ok(()),
             _ => {
                 let tn = self.tn(&h.ty);
                 self.fail(

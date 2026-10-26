@@ -98,6 +98,8 @@ pub struct StructInfo {
     pub offsets: Vec<u32>,
     /// Total heap size (multiple of 8).
     pub size: u32,
+    /// A tuple `(A, B)`: an anonymous struct with fields `0`, `1`, ...
+    pub tuple: bool,
 }
 
 impl StructInfo {
