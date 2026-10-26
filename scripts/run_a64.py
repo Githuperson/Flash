@@ -95,7 +95,7 @@ def main():
         if macos:
             # BSD number in x16 -> the Linux number of the same call
             bsd = mu.reg_read(UC_ARM64_REG_X16)
-            n = {1: 94, 3: 63, 4: 64, 5: -56, 6: 57, 10: -35, 33: -48, 73: 215, 197: 222, 116: -113, 93: -101, 515: 98, 516: 98}.get(bsd, 9999)
+            n = {1: 94, 3: 63, 4: 64, 5: -56, 6: 57, 10: -35, 33: -48, 73: 215, 197: 222, 116: -113, 93: -101, 515: 98, 516: 98, 20: 172}.get(bsd, 9999)
         a = [mu.reg_read(r) for r in (UC_ARM64_REG_X0, UC_ARM64_REG_X1, UC_ARM64_REG_X2, UC_ARM64_REG_X3, UC_ARM64_REG_X4, UC_ARM64_REG_X5)]
         def sg(x): return x - (1 << 64) if x >> 63 else x
         r = -38

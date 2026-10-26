@@ -190,7 +190,7 @@ fn fl_thread_entry(st: Int):
     if __os() == 2:
         __winapi(18, 0, 0, 0, 0, 0, 0, 0)
     elif __os() == 1:
-        __syscall(93, 0, 0, 0, 0, 0, 0)
+        __syscall(20, 0, 0, 0, 0, 0, 0)
     elif __arch() == 1:
         __syscall(124, 0, 0, 0, 0, 0, 0)
     else:
