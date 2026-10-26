@@ -127,6 +127,12 @@ def main():
             r = env_addr
         elif name == 'GetLastError':
             r = last_error[0]
+        elif name == 'SwitchToThread':
+            r = 0
+        elif name == 'CreateThread':
+            r = 0  # threads cannot be emulated; the runtime reports "could not start a thread"
+        elif name == 'WaitForSingleObject':
+            r = 0
         else:
             raise RuntimeError('unemulated import ' + name)
         mu.reg_write(UC_X86_REG_RAX, r)
@@ -136,6 +142,10 @@ def main():
     def hook(mu_, addr, size, ud):
         api(names[addr])
     mu.hook_add(UC_HOOK_CODE, hook, None, FAKE, FAKE + 16 * len(names))
+    # the TEB (gs:[0x28] is the user pointer the runtime keeps its thread state in)
+    TEB = 0x7F8000000
+    mu.mem_map(TEB, 0x1000)
+    mu.reg_write(UC_X86_REG_GS_BASE, TEB)
     # the loader calls the entry point like a function: rsp = 8 mod 16
     HALT = STACK - 0x100
     mu.mem_write(HALT, b'\xF4')

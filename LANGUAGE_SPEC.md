@@ -502,7 +502,7 @@ Not covered:
 
 ### Data races and concurrency
 
-Flash has threads and channels (Linux only for now; other systems report this at compile time). Threads **share nothing**: whatever a thread uses is
+Flash has threads and channels on Linux, Windows and macOS on Apple Silicon (macOS on x86-64 reports at compile time that it can't). Threads **share nothing**: whatever a thread uses is
 copied or moved into it, and values travel between threads through channels, so safe Flash code cannot have a data race.
 
 ```
@@ -521,8 +521,7 @@ say(unwrap(recv(results)))                  # 42
   (a channel is freed with its last handle, together with any messages nobody received).
 * A thread that is never joined is simply left running until the program exits. Output written by threads is flushed a line at a time.
 * A runtime error in any thread (an out-of-range index, a failed `assert`, ...) ends the whole program with exit code 101.
-* Implementation: every thread has its own runtime state (so the allocator needs no locks); channels use atomic operations and futexes. On x86-64 and AArch64 Linux the code
-  generators emit the `clone` call, the atomics and the thread-pointer access themselves; no C library is involved.
+* Implementation: every thread has its own runtime state (so the allocator needs no locks); channels use atomic operations and wait on futexes (`__ulock_wait` on macOS; Windows polls with `SwitchToThread` / `Sleep`). On Linux the code generators emit the `clone` call, the atomics and the thread-pointer access themselves, with no C library involved; Windows uses `CreateThread` / `WaitForSingleObject` from kernel32, and macOS imports `pthread_create` and `pthread_join` from libSystem (the executable then carries a small bind table for them).
 
 ### `unsafe`
 
@@ -718,7 +717,7 @@ These are part of the design direction but **do not exist** in v0.1; the compile
 * traits/interfaces, generic *functions* with explicit type parameters (plain functions are already generic by inference), operator overloading, closures that capture strings, lists or structs;
 * string indexing and slicing syntax, character type, string formatting specs (`{x:.2f}`);
 * global variables and constants; `while … else`; `del`; `with`;
-* async/await, locks and shared mutable state between threads; threads and channels on macOS and Windows (they work on Linux only);
+* async/await, locks and shared mutable state between threads; threads and channels on macOS with Intel CPUs and on Windows on ARM;
 * `unsafe` blocks and raw pointers;
 * reference locals (`b = bodies[i]` is rejected because it would move an element out; index each time or use `for`);
 * statically linking of anything other than C-ABI `extern fn` functions (no automatic bindings, no strings/structs across `extern fn`);

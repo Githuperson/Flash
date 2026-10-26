@@ -130,21 +130,68 @@ pub fn write(img: &Image, l: &Layout, arch: Arch, ident: &str) -> Vec<u8> {
     let mut linkedit: Vec<u8> = vec![];
     let (mut cf_off, mut cf_len, mut trie_off, mut sym_off, mut str_off) = (0, 0, 0, 0, 0);
     if arch == Arch::Arm64 {
-        // chained fixups: header, starts_in_image (one entry per segment, none with fixups), no imports
         cf_off = linkedit_off;
-        put32(&mut linkedit, 0); // fixups_version
-        put32(&mut linkedit, 32); // starts_offset
-        put32(&mut linkedit, 56); // imports_offset
-        put32(&mut linkedit, 56); // symbols_offset
-        put32(&mut linkedit, 0); // imports_count
-        put32(&mut linkedit, 1); // imports_format: DYLD_CHAINED_IMPORT
-        put32(&mut linkedit, 0); // symbols_format
-        put32(&mut linkedit, 0); // padding up to starts_offset
-        put32(&mut linkedit, 4); // seg_count
-        for _ in 0..4 {
-            put32(&mut linkedit, 0); // seg_info_offset: no fixups in this segment
+        if img.imports.is_empty() {
+            // chained fixups: header, starts_in_image (one entry per segment, none with fixups), no imports
+            put32(&mut linkedit, 0); // fixups_version
+            put32(&mut linkedit, 32); // starts_offset
+            put32(&mut linkedit, 56); // imports_offset
+            put32(&mut linkedit, 56); // symbols_offset
+            put32(&mut linkedit, 0); // imports_count
+            put32(&mut linkedit, 1); // imports_format: DYLD_CHAINED_IMPORT
+            put32(&mut linkedit, 0); // symbols_format
+            put32(&mut linkedit, 0); // padding up to starts_offset
+            put32(&mut linkedit, 4); // seg_count
+            for _ in 0..4 {
+                put32(&mut linkedit, 0); // seg_info_offset: no fixups in this segment
+            }
+            linkedit.resize(64, 0); // padding + empty symbol pool
+        } else {
+            // Binds of libSystem functions into a table of pointers at the start of __DATA: the data
+            // segment has one chain through those words (see mach-o/fixup-chains.h).
+            let n = img.imports.len();
+            let page_count = (data_vmsize / page) as usize;
+            let seg_size = 22 + 2 * page_count;
+            let imports_off = align(56 + seg_size as u64, 8) as usize;
+            let symbols_off = imports_off + 4 * n;
+            put32(&mut linkedit, 0); // fixups_version
+            put32(&mut linkedit, 32); // starts_offset
+            put32(&mut linkedit, imports_off as u32);
+            put32(&mut linkedit, symbols_off as u32);
+            put32(&mut linkedit, n as u32); // imports_count
+            put32(&mut linkedit, 1); // imports_format: DYLD_CHAINED_IMPORT
+            put32(&mut linkedit, 0); // symbols_format: uncompressed
+            put32(&mut linkedit, 0); // padding up to starts_offset
+            // dyld_chained_starts_in_image: __PAGEZERO, __TEXT, __DATA, __LINKEDIT
+            put32(&mut linkedit, 4);
+            for seg in 0..4 {
+                put32(&mut linkedit, if seg == 2 { 24 } else { 0 }); // offset of the __DATA info from this struct
+            }
+            put32(&mut linkedit, 0); // padding: the segment info starts at offset 56
+            // dyld_chained_starts_in_segment for __DATA
+            put32(&mut linkedit, seg_size as u32);
+            linkedit.extend_from_slice(&(page as u16).to_le_bytes()); // page_size
+            linkedit.extend_from_slice(&2u16.to_le_bytes()); // pointer_format: DYLD_CHAINED_PTR_64
+            put64(&mut linkedit, l.data - l.base); // segment_offset
+            put32(&mut linkedit, 0); // max_valid_pointer
+            linkedit.extend_from_slice(&(page_count as u16).to_le_bytes());
+            for p in 0..page_count {
+                linkedit.extend_from_slice(&(if p == 0 { 0u16 } else { 0xFFFF }).to_le_bytes()); // first fixup in the page
+            }
+            linkedit.resize(imports_off, 0);
+            let mut pool: Vec<u8> = vec![0];
+            for (i, name) in img.imports.iter().enumerate() {
+                // lib_ordinal 1 (libSystem), not weak, name_offset
+                put32(&mut linkedit, 1 | ((pool.len() as u32) << 9));
+                let _ = i;
+                pool.extend_from_slice(name.as_bytes());
+                pool.push(0);
+            }
+            linkedit.extend_from_slice(&pool);
+            while linkedit.len() % 8 != 0 {
+                linkedit.push(0);
+            }
         }
-        linkedit.resize(64, 0); // padding + empty symbol pool
         cf_len = linkedit.len();
         trie_off = linkedit_off + linkedit.len();
         linkedit.extend_from_slice(&[0, 0, 0, 0, 0, 0, 0, 0]); // empty exports trie
@@ -272,7 +319,14 @@ pub fn write(img: &Image, l: &Layout, arch: Arch, ident: &str) -> Vec<u8> {
     out.extend_from_slice(img.rodata);
     out.resize(text_seg_end as usize, 0);
     assert_eq!(out.len() as u64, data_off);
-    out.extend_from_slice(img.data);
+    let mut data_bytes = img.data.to_vec();
+    for i in 0..img.imports.len() {
+        // dyld_chained_ptr_64_bind: ordinal (import index) in bits 0-23, next (in 4-byte units) in bits 51-62, bind in bit 63
+        let next: u64 = if i + 1 < img.imports.len() { 2 } else { 0 };
+        let entry: u64 = i as u64 | (next << 51) | (1 << 63);
+        data_bytes[8 * i..8 * i + 8].copy_from_slice(&entry.to_le_bytes());
+    }
+    out.extend_from_slice(&data_bytes);
     out.resize(linkedit_off, 0);
     out.extend_from_slice(&linkedit);
     assert_eq!(out.len(), signed_len);

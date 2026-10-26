@@ -28,24 +28,60 @@ fn at_add(addr: Int, delta: Int) -> Int:
     return __syscall(2147418115, addr, delta, 0, 0, 0, 0)
 
 fn pl_set_tp(st: Int):
-    if __arch() == 1:
+    if __os() != 0:
+        # Windows: gs:[0x28] of the TEB; macOS: a thread-specific-data slot
+        __syscall(2147418117, st, 0, 0, 0, 0, 0)
+    elif __arch() == 1:
         __syscall(2147418117, st, 0, 0, 0, 0, 0)
     else:
         __syscall(158, 4098, st, 0, 0, 0, 0)
 
+# Windows has no futex in kernel32: wait by yielding, then sleeping a millisecond.
 fn pl_futex_wait(addr: Int, val: Int):
+    if __os() == 2:
+        i = 0
+        while i < 200:
+            if (__peek(addr, 0) & 4294967295) != (val & 4294967295):
+                return
+            __winapi(18, 0, 0, 0, 0, 0, 0, 0)
+            i += 1
+        __winapi(10, 1, 0, 0, 0, 0, 0, 0)
+        return
+    if __os() == 1:
+        # __ulock_wait(UL_COMPARE_AND_WAIT, addr, value, no timeout)
+        __syscall(515, 1, addr, val, 0, 0, 0)
+        return
     if __arch() == 1:
         __syscall(98, addr, 0, val, 0, 0, 0)
     else:
         __syscall(202, addr, 0, val, 0, 0, 0)
 
 fn pl_futex_wake(addr: Int, n: Int):
+    if __os() == 2:
+        return
+    if __os() == 1:
+        # __ulock_wake(UL_COMPARE_AND_WAIT [| ULF_WAKE_ALL], addr)
+        if n > 1:
+            __syscall(516, 257, addr, 0, 0, 0, 0)
+        else:
+            __syscall(516, 1, addr, 0, 0, 0, 0)
+        return
     if __arch() == 1:
         __syscall(98, addr, 1, n, 0, 0, 0)
     else:
         __syscall(202, addr, 1, n, 0, 0, 0)
 
 fn pl_yield():
+    if __os() == 2:
+        __winapi(18, 0, 0, 0, 0, 0, 0, 0)
+        return
+    if __os() == 1:
+        # select(0, 0, 0, 0, &{0 s, 50 us}) as a short sleep
+        tv = __state() + 1024
+        __poke(tv, 0, 0)
+        __poke(tv, 8, 50)
+        __syscall(93, 0, 0, 0, 0, tv, 0)
+        return
     if __arch() == 1:
         __syscall(124, 0, 0, 0, 0, 0, 0)
     else:
@@ -67,6 +103,10 @@ fn fl_thread_spawn(closure: Int) -> Int:
     # everything printed so far comes out before anything the new thread prints
     out_flush()
     __poke(me, 61456, 1)
+    if __os() == 2:
+        return thread_spawn_win(me, closure)
+    if __os() == 1:
+        return thread_spawn_mac(me, closure)
     total = thread_total()
     mem = pl_mmap(total)
     if mem == 0:
@@ -93,12 +133,65 @@ fn fl_thread_spawn(closure: Int) -> Int:
         fl_thread_entry(0)
     return mem
 
+# Windows: the thread block is just the state block; the system provides the stack.
+fn thread_spawn_win(me: Int, closure: Int) -> Int:
+    mem = pl_mmap(65536)
+    if mem == 0:
+        out_of_memory()
+    __poke(mem, 0, __peek(me, 0))
+    __poke(mem, 64, __peek(me, 64))
+    __poke(mem, 61440, closure)
+    __poke(mem, 61456, 1)
+    __poke(mem, 61464, mem)
+    h = __syscall(2147418118, mem, 8388608, 0, 0, 0, 0)
+    if h == 0:
+        out_flush()
+        err_str(__str("Flash runtime error: could not start a thread\n"))
+        sys_exit(101)
+    __poke(mem, 61448, h)
+    if h == 4611686018427387904:
+        fl_thread_entry(0)
+    return mem
+
+# macOS: libSystem's pthread_create starts the thread (imports 0..3 of the GOT: create, join,
+# attr_init, attr_setstacksize), the thread block is just the state block.
+fn mac_call(slot: Int, a: Int, b: Int, c: Int, d: Int) -> Int:
+    return __syscall(2147418119, slot, a, b, c, d, 0)
+
+fn thread_spawn_mac(me: Int, closure: Int) -> Int:
+    mem = pl_mmap(65536)
+    if mem == 0:
+        out_of_memory()
+    __poke(mem, 0, __peek(me, 0))
+    __poke(mem, 64, __peek(me, 64))
+    __poke(mem, 61440, closure)
+    __poke(mem, 61456, 1)
+    __poke(mem, 61464, mem)
+    attr = mem + 61504
+    mac_call(2, attr, 0, 0, 0)
+    mac_call(3, attr, 8388608, 0, 0)
+    entry = __syscall(2147418120, 0, 0, 0, 0, 0, 0)
+    r = mac_call(0, mem + 61448, attr, entry, mem)
+    if r != 0:
+        out_flush()
+        err_str(__str("Flash runtime error: could not start a thread\n"))
+        sys_exit(101)
+    if r == 4611686018427387904:
+        fl_thread_entry(0)
+    return mem
+
 # The first function a new thread runs; the code generator calls it on the fresh stack.
 fn fl_thread_entry(st: Int):
+    if __os() != 0:
+        pl_set_tp(st)
     fl_run_closure(__peek(st, 61440))
     out_flush()
     # (a system call here also keeps this function from being inlined, which would hide it from the code generator)
-    if __arch() == 1:
+    if __os() == 2:
+        __winapi(18, 0, 0, 0, 0, 0, 0, 0)
+    elif __os() == 1:
+        __syscall(93, 0, 0, 0, 0, 0, 0)
+    elif __arch() == 1:
         __syscall(124, 0, 0, 0, 0, 0, 0)
     else:
         __syscall(24, 0, 0, 0, 0, 0, 0)
@@ -106,15 +199,25 @@ fn fl_thread_entry(st: Int):
 # Waits until the thread has finished, then releases its memory.
 fn fl_thread_join(h: Int):
     out_flush()
-    while True:
-        v = __peek(h, 61448)
-        if v == 0:
-            break
-        pl_futex_wait(h + 61448, v)
+    if __os() == 2:
+        handle = __peek(h, 61448)
+        __winapi(17, handle, 4294967295, 0, 0, 0, 0, 0)
+        __winapi(4, handle, 0, 0, 0, 0, 0, 0)
+    elif __os() == 1:
+        mac_call(1, __peek(h, 61448), 0, 0, 0)
+    else:
+        while True:
+            v = __peek(h, 61448)
+            if v == 0:
+                break
+            pl_futex_wait(h + 61448, v)
     me = __state()
     # allocations the thread left alive (messages it sent, ...) now count for the joining thread
     __poke(me, 24, __peek(me, 24) + __peek(h, 24))
-    pl_munmap(h, thread_total())
+    if __os() != 0:
+        pl_munmap(h, 65536)
+    else:
+        pl_munmap(h, thread_total())
 
 # ------------------------------------------------------------------ channels
 fn chan_lock(c: Int):

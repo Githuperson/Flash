@@ -55,13 +55,13 @@ macro_rules! programs {
 
 mod tests_dir {
     use super::*;
-    // Threads and channels need Linux for now (the compiler says so on the other systems).
-    #[cfg(target_os = "linux")]
+    // Threads and channels: Linux, Windows and Apple Silicon (not macOS on x86-64).
+    #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
     #[test]
     fn threads() {
         run_program("tests/programs", "threads");
     }
-    #[cfg(target_os = "linux")]
+    #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
     #[test]
     fn channels() {
         run_program("tests/programs", "channels");

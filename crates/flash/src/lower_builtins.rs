@@ -613,8 +613,8 @@ impl<'a, 'p> FnLower<'a, 'p> {
             }
             "__os" => self.iconst(Ty::I64, self.lw.target_os & 3),
             "__arch" => self.iconst(Ty::I64, self.lw.target_os >> 2),
-            "__state" if self.lw.target_os & 3 == 0 => {
-                // Linux: every thread has its own state block, found through the thread pointer
+            "__state" if self.lw.target_os != 1 => {
+                // everywhere except macOS on x86-64: every thread has its own state block, found through the thread pointer
                 let d = self.vreg(Ty::I64);
                 self.emit(Inst::ThreadPtr { dst: d });
                 d

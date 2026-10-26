@@ -848,7 +848,12 @@ impl<'m> Cg<'m> {
                 let rd = self.dst_int(st, *dst);
                 let rex = 0x48 | (((rd as u8) >> 3) << 2);
                 let modrm = 0x04 | (((rd as u8) & 7) << 3);
-                self.a.buf.extend_from_slice(&[0x64, rex, 0x8B, modrm, 0x25, 0x18, 0xF0, 0, 0]);
+                if self.target.os == super::Os::Windows {
+                    // mov rd, gs:[0x28]  (the TEB's user pointer holds the state block)
+                    self.a.buf.extend_from_slice(&[0x65, rex, 0x8B, modrm, 0x25, 0x28, 0, 0, 0]);
+                } else {
+                    self.a.buf.extend_from_slice(&[0x64, rex, 0x8B, modrm, 0x25, 0x18, 0xF0, 0, 0]);
+                }
                 self.commit_int(st, *dst, rd);
             }
             Inst::StackAddr { dst, slot } => {
@@ -1524,10 +1529,13 @@ impl<'m> Cg<'m> {
     /// The pseudo system calls of `native::pseudo` (arguments are already in the syscall registers).
     fn pseudo_syscall(&mut self, num: i64) -> Result<(), String> {
         use super::pseudo::*;
-        if self.target.os != super::Os::Linux {
-            return Err("this program uses threads or channels, which are only supported on Linux so far".into());
+        if self.target.os == super::Os::MacOs {
+            return Err("this program uses threads or channels, which need Apple Silicon on macOS".into());
         }
+        let win = self.target.os == super::Os::Windows;
         match num {
+            SET_TP if win => self.a.buf.extend_from_slice(&[0x65, 0x48, 0x89, 0x3C, 0x25, 0x28, 0, 0, 0]), // mov gs:[0x28], rdi
+            SPAWN_WIN => self.spawn_win()?,
             CAS => {
                 self.a.buf.extend_from_slice(&[0x48, 0x89, 0xF0]); // mov rax, rsi
                 self.a.buf.extend_from_slice(&[0xF0, 0x48, 0x0F, 0xB1, 0x17]); // lock cmpxchg [rdi], rdx
@@ -1567,14 +1575,72 @@ impl<'m> Cg<'m> {
         Ok(())
     }
 
+    /// Windows: `CreateThread(0, stack, stub, arg, STACK_SIZE_PARAM_IS_A_RESERVATION, 0)` where the
+    /// stub (emitted inline) saves the non-volatile registers and calls the Flash thread entry.
+    /// In: rdi = argument, rsi = stack size. Out: rax = thread handle.
+    fn spawn_win(&mut self) -> Result<(), String> {
+        let entry = self
+            .m
+            .funcs
+            .iter()
+            .position(|f| f.name == super::pseudo::THREAD_ENTRY)
+            .ok_or("internal error: the runtime has no thread entry function")?;
+        let b = &mut self.a.buf;
+        b.extend_from_slice(&[0x31, 0xC9]); // xor ecx, ecx
+        b.extend_from_slice(&[0x48, 0x89, 0xF2]); // mov rdx, rsi
+        b.extend_from_slice(&[0x4C, 0x8D, 0x05]); // lea r8, [rip + stub]
+        let lea_at = b.len();
+        b.extend_from_slice(&[0, 0, 0, 0]);
+        b.extend_from_slice(&[0x49, 0x89, 0xF9]); // mov r9, rdi
+        b.extend_from_slice(&[0x48, 0xC7, 0x44, 0x24, 0x20, 0x00, 0x00, 0x01, 0x00]); // mov qword [rsp+32], 0x10000
+        b.extend_from_slice(&[0x48, 0xC7, 0x44, 0x24, 0x28, 0, 0, 0, 0]); // mov qword [rsp+40], 0
+        b.extend_from_slice(&[0xFF, 0x15, 0, 0, 0, 0]); // call [rip + CreateThread]
+        let iat_at = b.len() - 4;
+        self.fix.iat.push((iat_at, 16));
+        let b = &mut self.a.buf;
+        b.push(0xE9); // jmp over the stub
+        let jmp_at = b.len();
+        b.extend_from_slice(&[0, 0, 0, 0]);
+        let stub = b.len();
+        b.extend_from_slice(&[0x53, 0x55, 0x57, 0x56, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57]); // push rbx rbp rdi rsi r12-r15
+        b.extend_from_slice(&[0x48, 0x83, 0xEC, 0x08]); // sub rsp, 8
+        b.extend_from_slice(&[0x48, 0x89, 0xCF]); // mov rdi, rcx
+        let at = self.a.call_patch();
+        self.fix.calls.push((at, entry as u32));
+        let b = &mut self.a.buf;
+        b.extend_from_slice(&[0x48, 0x83, 0xC4, 0x08]); // add rsp, 8
+        b.extend_from_slice(&[0x41, 0x5F, 0x41, 0x5E, 0x41, 0x5D, 0x41, 0x5C, 0x5E, 0x5F, 0x5D, 0x5B]); // pop r15-r12 rsi rdi rbp rbx
+        b.extend_from_slice(&[0x31, 0xC0, 0xC3]); // xor eax, eax; ret
+        let end = b.len();
+        let rel = (stub - (lea_at + 4)) as i32;
+        b[lea_at..lea_at + 4].copy_from_slice(&rel.to_le_bytes());
+        let rel = (end - (jmp_at + 4)) as i32;
+        b[jmp_at..jmp_at + 4].copy_from_slice(&rel.to_le_bytes());
+        Ok(())
+    }
+
     fn call(&mut self, st: &FnState, dst: Option<VReg>, callee: &Callee, args: &[VReg]) -> Result<(), String> {
+        if let Callee::Syscall = callee {
+            if let Opd::I(num) = self.opd(st, args[0]) {
+                if num >= super::pseudo::BASE {
+                    const SYS_REGS: [Reg; 6] = [RDI, RSI, RDX, R10, R8, R9];
+                    let mut moves = vec![];
+                    for (i, a) in args[1..].iter().enumerate() {
+                        moves.push((IDst::R(SYS_REGS[i]), self.isrc(st, *a)));
+                    }
+                    self.par_move_int(moves);
+                    self.pseudo_syscall(num)?;
+                    if let Some(d) = dst {
+                        self.commit_int(st, d, RAX);
+                    }
+                    return Ok(());
+                }
+            }
+        }
         if let (Callee::Syscall, super::Os::Windows) = (callee, self.target.os) {
             // args[0] = import slot, args[1..] = up to seven arguments of a Win64 call: rcx, rdx,
             // r8, r9, then the stack above the 32-byte shadow space.
             let Opd::I(slot) = self.opd(st, args[0]) else { return Err("Windows import numbers must be constants".into()) };
-            if slot >= super::pseudo::BASE {
-                return Err("this program uses threads or channels, which are only supported on Linux so far".into());
-            }
             const WIN_REGS: [Reg; 4] = [RCX, RDX, R8, R9];
             let mut moves = vec![];
             for (i, a) in args[1..].iter().enumerate() {
@@ -1599,15 +1665,6 @@ impl<'m> Cg<'m> {
             }
             self.par_move_int(moves);
             let n = self.opd(st, args[0]);
-            if let Opd::I(num) = n {
-                if num >= super::pseudo::BASE {
-                    self.pseudo_syscall(num)?;
-                    if let Some(d) = dst {
-                        self.commit_int(st, d, RAX);
-                    }
-                    return Ok(());
-                }
-            }
             if self.target.os == super::Os::MacOs {
                 // BSD system calls are class 2: the number is 0x2000000 | n. The kernel reports an
                 // error with the carry flag and a positive errno; the runtime expects -errno.

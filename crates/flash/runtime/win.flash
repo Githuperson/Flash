@@ -8,6 +8,7 @@
 #   8 QueryPerformanceCounter   9 QueryPerformanceFrequency   10 Sleep
 #  11 GetFileAttributesA        12 DeleteFileA                 13 GetCommandLineA
 #  14 GetEnvironmentStringsA    15 GetLastError
+#  16 CreateThread     17 WaitForSingleObject      18 SwitchToThread   (used by thread.flash)
 # Everything returns a negative errno-style number on failure (the Linux numbering, as the
 # portable part of the runtime expects). Files are opened with the ANSI functions, so paths are
 # interpreted in the system code page. A "file descriptor" of 0, 1, 2 is a standard stream; any

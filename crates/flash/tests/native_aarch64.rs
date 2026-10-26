@@ -143,7 +143,7 @@ fn language_features_run_on_aarch64() {
 }
 
 #[test]
-fn channels_and_atomics_run_on_aarch64_linux() {
+fn channels_and_atomics_run_on_aarch64() {
     if !emulator_available() {
         eprintln!("skipped: python3 with unicorn is not available");
         return;
@@ -152,7 +152,9 @@ fn channels_and_atomics_run_on_aarch64_linux() {
     // sequences through channels used from one thread. The threads test runs on real hardware in CI.)
     let src = repo_root().join("tests/programs/channels.flash");
     let expected = std::fs::read_to_string(src.with_extension("expected")).unwrap();
-    for release in [false, true] {
-        assert_eq!(emulate_for(&src, release, "aarch64-unknown-linux-gnu", &format!("a64-chan-{}", release)), expected);
+    for target in TARGETS {
+        for release in [false, true] {
+            assert_eq!(emulate_for(&src, release, target, &format!("a64-chan-{}", release)), expected, "{}", target);
+        }
     }
 }

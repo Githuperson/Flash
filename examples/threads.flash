@@ -1,4 +1,4 @@
-# Threads and channels (Linux for now): four workers square numbers sent to them.
+# Threads and channels: four workers square numbers sent to them.
 fn worker(jobs: Channel[Int], results: Channel[Int]):
     for n in jobs:  # receives until the channel is closed and empty
         send(results, n * n)

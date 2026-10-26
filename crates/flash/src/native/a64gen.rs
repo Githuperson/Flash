@@ -684,7 +684,13 @@ impl<'m> Cg<'m> {
             }
             Inst::ThreadPtr { dst } => {
                 let rd = self.def_reg(st, *dst);
-                self.a.word(0xD53B_D040 | rd as u32); // mrs rd, tpidr_el0
+                if self.target.os == super::Os::MacOs {
+                    // the state block is kept in a thread-specific-data slot: tpidrro_el0 points at the TSD array
+                    self.a.word(0xD53B_D060 | rd as u32); // mrs rd, tpidrro_el0
+                    self.a.word(0xF940_0000 | (super::pseudo::MAC_TSD_SLOT << 10) | ((rd as u32) << 5) | rd as u32); // ldr rd, [rd, #slot*8]
+                } else {
+                    self.a.word(0xD53B_D040 | rd as u32); // mrs rd, tpidr_el0
+                }
                 self.commit(st, *dst, rd);
             }
             Inst::StackAddr { dst, slot } => {
@@ -1090,9 +1096,10 @@ impl<'m> Cg<'m> {
     /// The pseudo system calls of `native::pseudo` (arguments are already in x0..x5).
     fn pseudo_syscall(&mut self, num: i64) -> Result<(), String> {
         use super::pseudo::*;
-        if self.target.os != super::Os::Linux {
-            return Err("this program uses threads or channels, which are only supported on Linux so far".into());
+        if self.target.os == super::Os::Windows {
+            return Err("this program uses threads or channels, which are not supported on Windows on ARM".into());
         }
+        let mac = self.target.os == super::Os::MacOs;
         // cbnz w5, back `n` words
         let cbnz_w5_back = |n: u32| 0x3500_0000u32 | (((0u32.wrapping_sub(n)) & 0x7_FFFF) << 5) | 5;
         match num {
@@ -1119,7 +1126,37 @@ impl<'m> Cg<'m> {
                 self.a.word(cbnz_w5_back(3));
                 self.a.word(0xAA04_03E0); // mov x0, x4
             }
+            SET_TP if mac => {
+                self.a.word(0xD53B_D061); // mrs x1, tpidrro_el0
+                self.a.word(0xF900_0000 | (MAC_TSD_SLOT << 10) | (1 << 5)); // str x0, [x1, #slot*8]
+            }
             SET_TP => self.a.word(0xD51B_D040), // msr tpidr_el0, x0
+            MAC_CALL if mac => {
+                // x0 = import number, x1..x5 = arguments: call through the GOT (saving lr around it)
+                self.a.mov(16, 0);
+                for i in 0..5u8 {
+                    self.a.mov(i, i + 1);
+                }
+                let at = self.a.adrp_patch(17);
+                self.a.add_imm(17, 17, 0);
+                self.fix.data.push((at, GOT_ID));
+                self.a.word(0xF860_7800 | (16 << 16) | (17 << 5) | 16); // ldr x16, [x17, x16, lsl #3]
+                self.a.word(0xF81F_0FFE); // str x30, [sp, #-16]!
+                self.a.word(0xD63F_0200); // blr x16
+                self.a.word(0xF841_07FE); // ldr x30, [sp], #16
+            }
+            FUNC_ADDR if mac => {
+                let entry = self
+                    .m
+                    .funcs
+                    .iter()
+                    .position(|f| f.name == THREAD_ENTRY)
+                    .ok_or("internal error: the runtime has no thread entry function")?;
+                let at = self.a.adrp_patch(0);
+                self.a.add_imm(0, 0, 0);
+                self.fix.data.push((at, FUNC_FLAG | entry as u32));
+            }
+            CLONE if mac => return Err("internal error: macOS starts threads through pthread_create".into()),
             CLONE => {
                 let entry = self
                     .m

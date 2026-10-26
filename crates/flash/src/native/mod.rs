@@ -109,8 +109,21 @@ pub mod pseudo {
     /// Start a thread. x86-64: (flags, stack, ptid, ctid, tls, arg); AArch64: (flags, stack, ptid, tls, ctid, arg).
     /// The child calls `THREAD_ENTRY(arg)` on the new stack and then exits. Returns the thread id.
     pub const CLONE: i64 = BASE + 4;
-    /// Set the thread pointer register (AArch64).
+    /// Set the thread pointer: `tpidr_el0` on AArch64, the TEB's user pointer (`gs:[0x28]`) on Windows.
     pub const SET_TP: i64 = BASE + 5;
+    /// Windows: start a thread running `THREAD_ENTRY(arg)` with the given stack size; returns its handle.
+    pub const SPAWN_WIN: i64 = BASE + 6;
+    /// macOS (arm64): call libSystem import number `x0` (see `MAC_IMPORTS`) with arguments x1..x5; returns x0.
+    pub const MAC_CALL: i64 = BASE + 7;
+    /// macOS (arm64): the address of `THREAD_ENTRY`.
+    pub const FUNC_ADDR: i64 = BASE + 8;
+    /// libSystem functions macOS programs with threads import, in GOT order.
+    pub const MAC_IMPORTS: [&str; 4] = ["_pthread_create", "_pthread_join", "_pthread_attr_init", "_pthread_attr_setstacksize"];
+    /// The thread-specific-data slot (`tpidrro_el0` + 8 * slot) where macOS threads keep their runtime state.
+    pub const MAC_TSD_SLOT: u32 = 700;
+    /// Pseudo data-item ids used in address fixups: the macOS GOT, and `FUNC_FLAG | function index`.
+    pub const GOT_ID: u32 = u32::MAX;
+    pub const FUNC_FLAG: u32 = 0x8000_0000;
     /// Name of the runtime function every new thread starts in.
     pub const THREAD_ENTRY: &str = "fl_thread_entry";
 }
@@ -228,7 +241,9 @@ pub fn compile(mut m: Module, target: Target) -> Result<Vec<u8>, String> {
             rodata.extend_from_slice(&d.bytes);
         }
     }
-    let mut data: Vec<u8> = vec![];
+    // macOS arm64 programs that start threads import pthread functions through a GOT at the very start of the data segment
+    let mac_threads = target.os == Os::MacOs && target.arch == Arch::Aarch64 && m.funcs.iter().any(|f| f.name == "fl_thread_spawn");
+    let mut data: Vec<u8> = if mac_threads { vec![0; 8 * pseudo::MAC_IMPORTS.len()] } else { vec![] };
     let mut bss: u64 = 0;
     for (i, d) in m.data.iter().enumerate() {
         if d.writable {
@@ -257,7 +272,14 @@ pub fn compile(mut m: Module, target: Target) -> Result<Vec<u8>, String> {
         imports = Some((block, off));
     }
     let lay = elf::layout(base, page, code.text.len() as u64, rodata.len() as u64, data.len() as u64);
+    let starts = code.starts.clone();
     let data_addr = |id: u32| -> u64 {
+        if id == pseudo::GOT_ID {
+            return lay.data;
+        }
+        if id & pseudo::FUNC_FLAG != 0 {
+            return lay.text + starts[(id & !pseudo::FUNC_FLAG) as usize] as u64;
+        }
         let (sec, off) = item_loc[id as usize];
         match sec {
             0 => lay.rodata + off,
@@ -330,7 +352,8 @@ pub fn compile(mut m: Module, target: Target) -> Result<Vec<u8>, String> {
         .enumerate()
         .map(|(i, f)| elf::Symbol { name: f.name.clone(), addr: lay.text + code.starts[i] as u64, size: (code.ends[i] - code.starts[i]) as u64 })
         .collect();
-    let img = elf::Image { text: &code.text, rodata: &rodata, data: &data, bss, entry: lay.text + code.entry as u64, symbols: &symbols };
+    let mac_imports: &[&str] = if mac_threads { &pseudo::MAC_IMPORTS } else { &[] };
+    let img = elf::Image { text: &code.text, rodata: &rodata, data: &data, bss, entry: lay.text + code.entry as u64, symbols: &symbols, imports: mac_imports };
     if let Some((block, off)) = &imports {
         return Ok(pe::write(&img, &lay, (off + block.dir_off as u64, block.dir_size as u64), (off + block.iat_off as u64, 8 * (pe::IMPORTS.len() as u64 + 1))));
     }

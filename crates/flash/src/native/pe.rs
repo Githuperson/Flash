@@ -9,7 +9,7 @@ use super::elf::{Image, Layout};
 
 /// The kernel32.dll functions the runtime uses; the index is the `__winapi` slot number
 /// (keep in sync with runtime/win.flash).
-pub const IMPORTS: [&str; 16] = [
+pub const IMPORTS: [&str; 19] = [
     "GetStdHandle",
     "WriteFile",
     "ReadFile",
@@ -26,6 +26,9 @@ pub const IMPORTS: [&str; 16] = [
     "GetCommandLineA",
     "GetEnvironmentStringsA",
     "GetLastError",
+    "CreateThread",
+    "WaitForSingleObject",
+    "SwitchToThread",
 ];
 
 const DLL: &str = "KERNEL32.dll";

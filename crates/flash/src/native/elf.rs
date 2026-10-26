@@ -24,6 +24,8 @@ pub struct Image<'a> {
     pub bss: u64,
     pub entry: u64,
     pub symbols: &'a [Symbol],
+    /// macOS arm64: names of libSystem functions bound into the first words of the data segment
+    pub imports: &'a [&'a str],
 }
 
 /// Virtual addresses of the segments for given section sizes.
