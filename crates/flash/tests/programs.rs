@@ -55,7 +55,7 @@ macro_rules! programs {
 
 mod tests_dir {
     use super::*;
-    programs!("tests/programs": integers, const_division, methods, tuples, enums, maps, strings, scopes, results, ownership, ownership_flow, generics, modules, tree);
+    programs!("tests/programs": integers, const_division, methods, tuples, enums, maps, generic_types, strings, scopes, results, ownership, ownership_flow, generics, modules, tree);
 }
 
 mod examples_dir {

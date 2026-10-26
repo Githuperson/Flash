@@ -89,6 +89,8 @@ pub struct FieldDef {
 
 #[derive(Clone, Debug)]
 pub struct StructDef {
+    /// Type parameters of a generic struct: `struct Pair[A, B]`.
+    pub params: Vec<String>,
     pub name: String,
     pub name_span: Span,
     pub fields: Vec<FieldDef>,
@@ -98,6 +100,8 @@ pub struct StructDef {
 /// `enum Shape:` with variants `Circle(radius: Float)`, `Rect(Float, Float)`, `Empty`.
 #[derive(Clone, Debug)]
 pub struct EnumDef {
+    /// Type parameters of a generic enum: `enum Option[T]`.
+    pub params: Vec<String>,
     pub name: String,
     pub name_span: Span,
     pub variants: Vec<VariantDef>,

@@ -1,0 +1,5 @@
+struct Pair[A, B]:
+    first: A
+    second: B
+
+p: Pair[Int] = Pair(first=1, second=2)

@@ -50,6 +50,11 @@ pub struct Checker<'a> {
     pub struct_ids: HashMap<String, StructId>,
     pub enums: Vec<EnumInfo>,
     pub enum_ids: HashMap<String, EnumId>,
+    /// generic struct / enum templates, instantiated on demand as `Name[Args]`
+    pub generic_structs: HashMap<String, Rc<StructDef>>,
+    pub generic_enums: HashMap<String, Rc<EnumDef>>,
+    /// type parameters in scope while a generic's fields are resolved
+    pub tsubst: HashMap<String, Type>,
     pub fns: Vec<FnItem>,
     pub fn_index: HashMap<(usize, String), usize>,
     pub instances: HashMap<(usize, Vec<Type>), FuncId>,
@@ -69,6 +74,9 @@ pub fn check_program(mods: &[LoadedModule], plugins: &[PluginBinding], diags: &m
         struct_ids: HashMap::new(),
         enums: vec![],
         enum_ids: HashMap::new(),
+        generic_structs: HashMap::new(),
+        generic_enums: HashMap::new(),
+        tsubst: HashMap::new(),
         fns: vec![],
         fn_index: HashMap::new(),
         instances: HashMap::new(),
@@ -144,13 +152,17 @@ impl<'a> Checker<'a> {
         for m in self.mods.iter() {
             for it in &m.ast.items {
                 if let Item::Enum(e) = it {
-                    if !self.enum_ids.contains_key(&e.name) {
+                    if !e.params.is_empty() {
+                        self.generic_enums.entry(e.name.clone()).or_insert_with(|| Rc::new(e.clone()));
+                    } else if !self.enum_ids.contains_key(&e.name) {
                         self.enum_ids.insert(e.name.clone(), self.enums.len());
                         self.enums.push(EnumInfo { name: e.name.clone(), variants: vec![], span: e.name_span, size: 8 });
                     }
                 }
                 if let Item::Struct(s) = it {
-                    if !self.struct_ids.contains_key(&s.name) {
+                    if !s.params.is_empty() {
+                        self.generic_structs.entry(s.name.clone()).or_insert_with(|| Rc::new(s.clone()));
+                    } else if !self.struct_ids.contains_key(&s.name) {
                         self.struct_ids.insert(s.name.clone(), self.structs.len());
                         self.structs.push(StructInfo { name: s.name.clone(), fields: vec![], span: s.name_span, offsets: vec![], size: 8, tuple: false });
                     }
@@ -160,6 +172,9 @@ impl<'a> Checker<'a> {
         for m in self.mods.iter() {
             for it in &m.ast.items {
                 if let Item::Struct(s) = it {
+                    if !s.params.is_empty() {
+                        continue;
+                    }
                     let id = self.struct_ids[&s.name];
                     let mut fields = vec![];
                     for f in &s.fields {
@@ -174,6 +189,9 @@ impl<'a> Checker<'a> {
         for m in self.mods.iter() {
             for it in &m.ast.items {
                 if let Item::Enum(e) = it {
+                    if !e.params.is_empty() {
+                        continue;
+                    }
                     let id = self.enum_ids[&e.name];
                     let mut variants = vec![];
                     for v in &e.variants {
@@ -199,7 +217,7 @@ impl<'a> Checker<'a> {
             for it in &m.ast.items {
                 if let Item::Fn(f) = it {
                     if let Some(o) = &f.owner {
-                        if !self.struct_ids.contains_key(o) && !self.enum_ids.contains_key(o) {
+                        if !self.struct_ids.contains_key(o) && !self.enum_ids.contains_key(o) && !self.generic_structs.contains_key(o) && !self.generic_enums.contains_key(o) {
                             self.error(
                                 Diagnostic::error(f.name_span, format!("There is no struct called '{}' to attach the method '{}' to.", o, f.name))
                                     .help(format!("Define the struct first (`struct {}:` with its fields), or write a plain function instead.", o)),
@@ -288,7 +306,7 @@ impl<'a> Checker<'a> {
         // Check every function that needs no inference even when it is never called.
         for fidx in 0..self.fns.len() {
             let def = self.fns[fidx].def.clone();
-            if def.params.iter().all(|p| p.ty.is_some()) {
+            if def.params.iter().all(|p| p.ty.is_some() && !self.is_generic_self(p)) {
                 let mut tys = vec![];
                 let mut ok = true;
                 for p in &def.params {
@@ -377,6 +395,16 @@ impl<'a> Checker<'a> {
                 Ok(Type::Struct(self.tuple_type(elems)))
             }
             n => {
+                if let Some(ty) = self.tsubst.get(n).cloned() {
+                    return self.no_args(t, ty);
+                }
+                if self.generic_structs.contains_key(n) || self.generic_enums.contains_key(n) {
+                    let mut args = vec![];
+                    for a in &t.args {
+                        args.push(self.resolve_type(a)?);
+                    }
+                    return self.instantiate_generic(n, args, t.span);
+                }
                 if let Some(id) = self.struct_ids.get(n) {
                     return self.no_args(t, Type::Struct(*id));
                 }
@@ -569,6 +597,9 @@ impl<'a> Checker<'a> {
         }
         let mut found = None;
         for (eid, e) in self.enums.iter().enumerate() {
+            if e.name.contains('[') {
+                continue; // instances of generic enums are found through `generic_variant`
+            }
             if let Some(vi) = e.variants.iter().position(|v| v.name == name) {
                 if found.is_some() {
                     return None; // ambiguous: write Enum.Variant
@@ -1361,6 +1392,9 @@ impl<'a> Checker<'a> {
                     if let Some((eid, vi)) = self.unqualified_variant(n) {
                         return self.construct_variant(eid, vi, &[], span);
                     }
+                    if let Some((en, vi)) = self.generic_variant(n) {
+                        return self.construct_generic_variant(&en, vi, &[], span, expected);
+                    }
                     // Reported by the resolver; stay quiet here.
                     return Err(());
                 };
@@ -1392,6 +1426,12 @@ impl<'a> Checker<'a> {
             ExprKind::Field { base, name, name_span } => {
                 if let ExprKind::Name(en) = &base.kind {
                     if self.lookup(en).is_none() {
+                        if let Some(ge) = self.generic_enums.get(en).cloned() {
+                            return match ge.variants.iter().position(|v| v.name == *name) {
+                                Some(vi) => self.construct_generic_variant(en, vi, &[], span, expected),
+                                None => self.fail(Diagnostic::error(*name_span, format!("The enum {} has no variant '{}'.", en, name))),
+                            };
+                        }
                         if let Some(&eid) = self.enum_ids.get(en) {
                             return match self.find_variant(eid, name) {
                                 Some(vi) => self.construct_variant(eid, vi, &[], span),
@@ -1652,8 +1692,14 @@ impl<'a> Checker<'a> {
                 if let Some(&sid) = self.struct_ids.get(n) {
                     return self.construct(sid, args, span);
                 }
+                if self.generic_structs.contains_key(n) {
+                    return self.construct_generic_struct(n, args, span, expected);
+                }
                 if let Some((eid, vi)) = self.unqualified_variant(n) {
                     return self.construct_variant(eid, vi, args, span);
+                }
+                if let Some((en, vi)) = self.generic_variant(n) {
+                    return self.construct_generic_variant(&en, vi, args, span, expected);
                 }
                 if is_builtin(n) {
                     let list: Vec<&Expr> = args.iter().map(|a| &a.value).collect();
@@ -1694,7 +1740,12 @@ impl<'a> Checker<'a> {
                 }
                 // Static method call: Player.new(args)
                 if let ExprKind::Name(tn) = &base.kind {
-                    if self.lookup(tn).is_none() && (self.struct_ids.contains_key(tn) || self.enum_ids.contains_key(tn)) {
+                    if self.lookup(tn).is_none() && (self.struct_ids.contains_key(tn) || self.enum_ids.contains_key(tn) || self.generic_structs.contains_key(tn) || self.generic_enums.contains_key(tn)) {
+                        if let Some(ge) = self.generic_enums.get(tn).cloned() {
+                            if let Some(vi) = ge.variants.iter().position(|v| v.name == *name) {
+                                return self.construct_generic_variant(tn, vi, args, span, expected);
+                            }
+                        }
                         // Shape.Circle(2.0): an enum variant
                         if let Some(&eid) = self.enum_ids.get(tn) {
                             if let Some(vi) = self.find_variant(eid, name) {
@@ -1770,6 +1821,7 @@ impl<'a> Checker<'a> {
 
     /// The function index of method `name` of struct `owner`, defined in this module or any other.
     fn find_method(&mut self, owner: &str, name: &str) -> Option<usize> {
+        let owner = base_name(owner);
         let key = format!("{}.{}", owner, name);
         let module = self.cx().module;
         if let Some(&f) = self.fn_index.get(&(module, key.clone())) {
@@ -1845,6 +1897,11 @@ impl<'a> Checker<'a> {
         Ok(slots.into_iter().map(|s| s.unwrap()).collect())
     }
 
+    /// The implicit `self: Pair` of a method on a generic type: it stands for any `Pair[...]`.
+    fn is_generic_self(&self, p: &Param) -> bool {
+        p.name == "self" && p.ty.as_ref().is_some_and(|t| t.args.is_empty() && (self.generic_structs.contains_key(&t.name) || self.generic_enums.contains_key(&t.name)))
+    }
+
     fn call_user(&mut self, fidx: usize, args: &[(Option<&str>, &Expr)], span: Span) -> R<HExpr> {
         let def = self.fns[fidx].def.clone();
         let names: Vec<String> = def.params.iter().map(|p| p.name.clone()).collect();
@@ -1855,6 +1912,7 @@ impl<'a> Checker<'a> {
         let mut failed = false;
         for (p, e) in def.params.iter().zip(bound.iter()) {
             let declared = match &p.ty {
+                Some(_) if self.is_generic_self(p) => None,
                 Some(t) => match self.resolve_type(t) {
                     Ok(t) => Some(t),
                     Err(_) => {
@@ -1916,6 +1974,214 @@ impl<'a> Checker<'a> {
             );
         };
         Ok(he(HKind::Call(id, hargs), ret, span))
+    }
+
+    /// `Pair[Int, String]`: the concrete struct or enum for a generic template.
+    fn instantiate_generic(&mut self, name: &str, args: Vec<Type>, span: Span) -> R<Type> {
+        let params = match (self.generic_structs.get(name), self.generic_enums.get(name)) {
+            (Some(s), _) => s.params.clone(),
+            (_, Some(e)) => e.params.clone(),
+            _ => return Err(()),
+        };
+        if params.len() != args.len() {
+            return self.fail(
+                Diagnostic::error(span, format!("{} needs {} type argument(s), but {} given.", name, params.len(), args.len()))
+                    .help(format!("Write it as {}[{}].", name, params.join(", "))),
+            );
+        }
+        let inner: Vec<String> = args.iter().map(|t| self.tn(t)).collect();
+        let full = format!("{}[{}]", name, inner.join(", "));
+        if let Some(&id) = self.struct_ids.get(&full) {
+            return Ok(Type::Struct(id));
+        }
+        if let Some(&id) = self.enum_ids.get(&full) {
+            return Ok(Type::Enum(id));
+        }
+        let saved = std::mem::replace(&mut self.tsubst, params.iter().cloned().zip(args).collect());
+        let result = if let Some(s) = self.generic_structs.get(name).cloned() {
+            let id = self.structs.len();
+            self.struct_ids.insert(full.clone(), id);
+            self.structs.push(StructInfo { name: full, fields: vec![], span: s.name_span, offsets: vec![], size: 8, tuple: false });
+            let mut fields = vec![];
+            for f in &s.fields {
+                if let Ok(t) = self.resolve_type(&f.ty) {
+                    fields.push((f.name.clone(), t));
+                }
+            }
+            self.structs[id].fields = fields;
+            self.structs[id].compute_layout();
+            Type::Struct(id)
+        } else {
+            let e = self.generic_enums.get(name).cloned().unwrap();
+            let id = self.enums.len();
+            self.enum_ids.insert(full.clone(), id);
+            self.enums.push(EnumInfo { name: full, variants: vec![], span: e.name_span, size: 8 });
+            let mut variants = vec![];
+            for v in &e.variants {
+                let mut fields = vec![];
+                for f in &v.fields {
+                    if let Ok(t) = self.resolve_type(&f.ty) {
+                        fields.push((f.name.clone(), t));
+                    }
+                }
+                variants.push(VariantInfo { name: v.name.clone(), fields, offsets: vec![] });
+            }
+            self.enums[id].variants = variants;
+            self.enums[id].compute_layout();
+            Type::Enum(id)
+        };
+        self.tsubst = saved;
+        Ok(result)
+    }
+
+    /// The generic enum that has an unqualified variant `name` (if exactly one does).
+    fn generic_variant(&mut self, name: &str) -> Option<(String, usize)> {
+        let module = self.cx().module;
+        if self.fn_index.contains_key(&(module, name.to_string())) || self.struct_ids.contains_key(name) || self.unqualified_variant(name).is_some() {
+            return None;
+        }
+        let mut found = None;
+        for (en, e) in self.generic_enums.iter() {
+            if let Some(vi) = e.variants.iter().position(|v| v.name == name) {
+                if found.is_some() {
+                    return None;
+                }
+                found = Some((en.clone(), vi));
+            }
+        }
+        found
+    }
+
+    /// Work out the type parameters from the types of the given field values.
+    fn unify(&self, te: &TypeExpr, ty: &Type, params: &[String], out: &mut HashMap<String, Type>) {
+        if te.args.is_empty() && params.iter().any(|p| *p == te.name) {
+            out.entry(te.name.clone()).or_insert_with(|| ty.clone());
+            return;
+        }
+        match (te.name.as_str(), ty) {
+            ("List", Type::List(i)) | ("Result", Type::Result(i)) | ("Set", Type::Set(i)) if te.args.len() == 1 => self.unify(&te.args[0], i, params, out),
+            ("Map", Type::Map(k, v)) if te.args.len() == 2 => {
+                self.unify(&te.args[0], k, params, out);
+                self.unify(&te.args[1], v, params, out);
+            }
+            ("Tuple", Type::Struct(sid)) if self.structs[*sid].tuple && self.structs[*sid].fields.len() == te.args.len() => {
+                for (a, (_, t)) in te.args.iter().zip(self.structs[*sid].fields.iter()) {
+                    self.unify(a, t, params, out);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Can the type parameters be read off a value of this field type? (`T`, `List[T]`, ...; not `Tree[T]`)
+    fn mentions(te: &TypeExpr, params: &[String]) -> bool {
+        if params.iter().any(|p| *p == te.name) {
+            return true;
+        }
+        matches!(te.name.as_str(), "List" | "Result" | "Set" | "Map" | "Tuple") && te.args.iter().any(|a| Self::mentions(a, params))
+    }
+
+    /// Check the arguments of a generic constructor, infer the type arguments from them, and
+    /// return the concrete type plus the checked field values.
+    fn infer_generic(&mut self, what: &str, name: &str, params: &[String], fields: &[FieldDef], vi: usize, args: &[Arg], span: Span, expected: Option<&Type>, noun: &str) -> R<(Type, Vec<HExpr>)> {
+        let names: Vec<String> = fields.iter().map(|f| f.name.clone()).collect();
+        let list: Vec<(Option<&str>, &Expr)> = args.iter().map(|a| (a.name.as_deref(), &a.value)).collect();
+        let bound = self.bind_args(what, &names, &list, span)?;
+        let mut targs: HashMap<String, Type> = HashMap::new();
+        // the expected type fixes every parameter at once
+        let known = match expected {
+            Some(t @ (Type::Struct(_) | Type::Enum(_))) => {
+                let n = match t {
+                    Type::Struct(s) => self.structs[*s].name.clone(),
+                    Type::Enum(e) => self.enums[*e].name.clone(),
+                    _ => unreachable!(),
+                };
+                (base_name(&n) == name && n.contains('[')).then(|| t.clone())
+            }
+            _ => None,
+        };
+        let mut pre: Vec<Option<HExpr>> = vec![None; fields.len()];
+        let mut failed = false;
+        if known.is_none() {
+            for (i, (f, e)) in fields.iter().zip(bound.iter()).enumerate() {
+                if Self::mentions(&f.ty, params) {
+                    match self.expr(e, None, Ctx::Value) {
+                        Ok(h) => {
+                            self.unify(&f.ty, &h.ty, params, &mut targs);
+                            pre[i] = Some(h);
+                        }
+                        Err(_) => failed = true,
+                    }
+                }
+            }
+            if failed {
+                return Err(());
+            }
+            let mut tys = vec![];
+            for p in params {
+                match targs.get(p) {
+                    Some(t) => tys.push(t.clone()),
+                    None => {
+                        return self.fail(
+                            Diagnostic::error(span, format!("I can't tell what '{}' is for this {}.", p, name))
+                                .help(format!("Say which type you want: `x: {}[...] = ...`.", name)),
+                        );
+                    }
+                }
+            }
+            let ty = self.instantiate_generic(name, tys, span)?;
+            return self.finish_generic(ty, vi, &bound, pre, noun);
+        }
+        self.finish_generic(known.unwrap(), vi, &bound, pre, noun)
+    }
+
+    /// With the concrete type known, check the remaining values against its field types.
+    fn finish_generic(&mut self, ty: Type, vi: usize, bound: &[&Expr], pre: Vec<Option<HExpr>>, what: &str) -> R<(Type, Vec<HExpr>)> {
+        let fields = match &ty {
+            Type::Struct(s) => self.structs[*s].fields.clone(),
+            Type::Enum(e) => self.enums[*e].variants[vi].fields.clone(),
+            _ => return Err(()),
+        };
+        let mut hs = vec![];
+        let mut failed = false;
+        for (((fname, fty), e), p) in fields.iter().zip(bound.iter()).zip(pre) {
+            let h = match p {
+                Some(h) => Ok(h),
+                None => self.expr(e, Some(fty), Ctx::Value),
+            };
+            match h {
+                Ok(h) => {
+                    if h.ty != *fty && h.ty != Type::Error {
+                        let w = format!("The {} '{}' of {}", what, fname, self.tn(&ty));
+                        let _ = self.type_mismatch::<()>(e.span, fty, &h, &w);
+                        failed = true;
+                    } else {
+                        hs.push(h);
+                    }
+                }
+                Err(_) => failed = true,
+            }
+        }
+        if failed {
+            return Err(());
+        }
+        Ok((ty, hs))
+    }
+
+    fn construct_generic_struct(&mut self, name: &str, args: &[Arg], span: Span, expected: Option<&Type>) -> R<HExpr> {
+        let def = self.generic_structs.get(name).cloned().unwrap();
+        let what = format!("The struct {}", name);
+        let (ty, hs) = self.infer_generic(&what, name, &def.params, &def.fields, 0, args, span, expected, "field")?;
+        Ok(he(HKind::Struct(hs), ty, span))
+    }
+
+    fn construct_generic_variant(&mut self, en: &str, vi: usize, args: &[Arg], span: Span, expected: Option<&Type>) -> R<HExpr> {
+        let def = self.generic_enums.get(en).cloned().unwrap();
+        let v = &def.variants[vi];
+        let what = format!("The variant {}.{}", en, v.name);
+        let (ty, hs) = self.infer_generic(&what, en, &def.params, &v.fields, vi, args, span, expected, "value")?;
+        let Type::Enum(eid) = ty else { return Err(()) };
+        Ok(he(HKind::Variant { enum_id: eid, variant: vi, fields: hs }, ty, span))
     }
 
     fn construct(&mut self, sid: StructId, args: &[Arg], span: Span) -> R<HExpr> {
@@ -2066,5 +2332,14 @@ pub fn always_returns(stmts: &[HStmt]) -> bool {
             HStmtKind::While(c, body) => matches!(c.kind, HKind::Bool(true)) && !contains_break(body),
             _ => false,
         }),
+    }
+}
+
+/// `Pair` for the instance `Pair[Int, String]` (tuple types keep their whole name).
+fn base_name(n: &str) -> &str {
+    if n.starts_with('(') {
+        n
+    } else {
+        n.split('[').next().unwrap_or(n)
     }
 }

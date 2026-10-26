@@ -1,0 +1,55 @@
+struct Pair[A, B]:
+    first: A
+    second: B
+
+enum Option[T]:
+    Some(value: T)
+    Nothing
+
+enum Tree[T]:
+    Leaf
+    Node(value: T, left: Tree[T], right: Tree[T])
+
+fn Pair.swap(self):
+    return Pair(first=copy(self.second), second=copy(self.first))
+
+fn Pair.show(self):
+    say(f"({self.first}, {self.second})")
+
+fn index_of(items: List[Int], target: Int) -> Option[Int]:
+    for i in 0..len(items):
+        if items[i] == target:
+            return Some(i)
+    return Nothing
+
+fn describe(o: Option[Int]):
+    match o:
+        Some(v):
+            say(f"found at {v}")
+        Nothing:
+            say("not found")
+
+fn sum_tree(t: Tree[Int]) -> Int:
+    match t:
+        Leaf:
+            return 0
+        Node(v, l, r):
+            return v + sum_tree(l) + sum_tree(r)
+    return 0
+
+p = Pair(first=1, second="one")
+p.show()
+q = p.swap()
+q.show()
+names = Pair(first=["a", "b"], second=2.5)
+say(len(names.first))
+describe(index_of([4, 5, 6], 6))
+describe(index_of([4, 5, 6], 9))
+word: Option[String] = Some("hi")
+match word:
+    Some(w):
+        say(w)
+    Nothing:
+        say("none")
+t = Node(value=1, left=Node(value=2, left=Leaf, right=Leaf), right=Node(value=3, left=Leaf, right=Leaf))
+say(sum_tree(t))

@@ -27,6 +27,8 @@ struct Resolver<'a> {
     enums: HashMap<String, Vec<String>>,
     /// variant name -> enums that have it (for unqualified use)
     variants: HashMap<String, Vec<String>>,
+    /// type parameters of the generic struct/enum being visited
+    tparams: HashSet<String>,
     cur: usize,
     scopes: Vec<HashSet<String>>,
     loop_depth: usize,
@@ -38,7 +40,7 @@ fn is_collection_method(name: &str) -> bool {
 }
 
 pub fn resolve(mods: &[LoadedModule], plugins: &[PluginBinding], diags: &mut Diagnostics) {
-    let mut r = Resolver { mods, plugins, diags, fns: vec![], structs: HashMap::new(), methods: HashSet::new(), enums: HashMap::new(), variants: HashMap::new(), cur: 0, scopes: vec![], loop_depth: 0 };
+    let mut r = Resolver { mods, plugins, diags, fns: vec![], structs: HashMap::new(), methods: HashSet::new(), enums: HashMap::new(), variants: HashMap::new(), tparams: HashSet::new(), cur: 0, scopes: vec![], loop_depth: 0 };
     r.run();
 }
 
@@ -181,16 +183,20 @@ impl<'a> Resolver<'a> {
                         self.scopes = saved;
                     }
                     Item::Struct(s) => {
+                        self.tparams = s.params.iter().cloned().collect();
                         for f in &s.fields {
                             self.type_expr(&f.ty);
                         }
+                        self.tparams.clear();
                     }
                     Item::Enum(e) => {
+                        self.tparams = e.params.iter().cloned().collect();
                         for v in &e.variants {
                             for f in &v.fields {
                                 self.type_expr(&f.ty);
                             }
                         }
+                        self.tparams.clear();
                     }
                     Item::ExternFn(f) => {
                         for (_, t) in &f.params {
@@ -211,7 +217,8 @@ impl<'a> Resolver<'a> {
         use crate::types::IntTy;
         let known = IntTy::from_name(&t.name).is_some()
             || matches!(t.name.as_str(), "Float" | "f64" | "Bool" | "String" | "None" | "List" | "Result" | "Tuple" | "Map" | "Set")
-            || self.structs.contains_key(&t.name);
+            || self.structs.contains_key(&t.name)
+            || self.tparams.contains(&t.name);
         if !known {
             let cands: Vec<&str> = ["Int", "Float", "Bool", "String", "None", "List", "Result", "i32", "u8"]
                 .iter()

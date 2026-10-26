@@ -308,9 +308,26 @@ impl<'a> Parser<'a> {
         Ok(ExternFnDef { name, name_span, params, ret, span })
     }
 
+    /// `[A, B]` after the name of a generic struct or enum (empty when absent).
+    fn type_params(&mut self) -> PResult<Vec<String>> {
+        let mut params = vec![];
+        if self.eat(&Tok::LBracket) {
+            loop {
+                let (p, _) = self.ident("a type parameter name")?;
+                params.push(p);
+                if !self.eat(&Tok::Comma) {
+                    break;
+                }
+            }
+            self.expect(Tok::RBracket, "']' to close the type parameters")?;
+        }
+        Ok(params)
+    }
+
     fn struct_def(&mut self) -> PResult<StructDef> {
         let start = self.bump().span;
         let (name, name_span) = self.ident("a struct name after `struct`")?;
+        let params = self.type_params()?;
         let header = start.to(self.prev_span());
         self.expect(Tok::Colon, "':' after the struct name")?;
         self.expect(Tok::Newline, "a new line after ':'")?;
@@ -337,7 +354,7 @@ impl<'a> Parser<'a> {
             }
         }
         self.eat(&Tok::Dedent);
-        Ok(StructDef { name, name_span, fields, span: header })
+        Ok(StructDef { params, name, name_span, fields, span: header })
     }
 
     /// ```text
@@ -349,6 +366,7 @@ impl<'a> Parser<'a> {
     fn enum_def(&mut self) -> PResult<EnumDef> {
         let start = self.bump().span;
         let (name, name_span) = self.ident("an enum name after `enum`")?;
+        let params = self.type_params()?;
         let header = start.to(self.prev_span());
         self.expect(Tok::Colon, "':' after the enum name")?;
         self.expect(Tok::Newline, "a new line after ':'")?;
@@ -393,7 +411,7 @@ impl<'a> Parser<'a> {
             }
         }
         self.eat(&Tok::Dedent);
-        Ok(EnumDef { name, name_span, variants, span: header })
+        Ok(EnumDef { params, name, name_span, variants, span: header })
     }
 
     fn pattern(&mut self) -> PResult<Pattern> {
