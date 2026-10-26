@@ -319,6 +319,7 @@ impl<'a> Emitter<'a> {
                 }
             }
             Inst::LoadIdx { .. } | Inst::StoreIdx { .. } => unreachable!("indexed memory instructions exist only in the native back end"),
+            Inst::ThreadPtr { .. } => unreachable!("the thread pointer exists only in the native back end"),
             Inst::DataAddr { dst, data } => {
                 let r = self.t();
                 let _ = writeln!(self.out, "  {} = ptrtoint ptr @data{} to i64", r, data);

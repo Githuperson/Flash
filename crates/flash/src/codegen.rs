@@ -360,6 +360,7 @@ mod cranelift_impl {
                 }
             }
             Inst::LoadIdx { .. } | Inst::StoreIdx { .. } => unreachable!("indexed memory instructions exist only in the native back end"),
+            Inst::ThreadPtr { .. } => unreachable!("the thread pointer exists only in the native back end"),
             Inst::DataAddr { dst, data } => {
                 let gv = module.declare_data_in_func(data_ids[*data as usize], b.func);
                 d!(dst, b.ins().symbol_value(types::I64, gv));
